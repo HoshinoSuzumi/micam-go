@@ -184,6 +184,13 @@ jobs:
     needs: [prepare, binary]
     runs-on: ubuntu-latest
     steps:
+      # gh release create --generate-notes 要在仓库里跑 git 才能找到上一个 tag，
+      # 所以这里必须 checkout。放在 download-artifact 之前：checkout 默认会
+      # git clean -ffdx，会把已经下载到 dist/ 的产物删掉。
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: actions/download-artifact@v4
         with:
           name: micam-binaries-${{ needs.prepare.outputs.version }}
