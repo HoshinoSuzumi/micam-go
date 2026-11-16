@@ -20,7 +20,7 @@ MICAM_QUALITY=3
 MICAM_PTS_LEAD=100
 MICAM_LAN=prefer
 MICAM_RECONNECT=5
-MICAM_PASS_TOKEN_FILE=/run/secrets/pass_token
+MICAM_PASS_TOKEN_FILE=/etc/micam/pass_token
 EOF
 fi
 

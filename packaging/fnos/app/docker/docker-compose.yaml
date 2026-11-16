@@ -24,6 +24,11 @@ services:
         [ -f /etc/micam/micam.env ] && . /etc/micam/micam.env
         set +a
 
+        # token 路径由挂载点决定。旧版本的配置文件里可能还写着
+        # /run/secrets/pass_token，这里强制覆盖，不让它把程序指到空处。
+        MICAM_PASS_TOKEN_FILE=/etc/micam/pass_token
+        export MICAM_PASS_TOKEN_FILE
+
         # 还没配置就待住，不要退出：restart 策略会把"秒退"变成无限重启，
         # 安装完成的那一刻就会刷满日志。配上之后 config_callback 会重建容器。
         #
@@ -31,6 +36,12 @@ services:
         # 容器里就永远判定为"未配置"。
         if [ -z "$${MICAM_DID:-}" ]; then
           echo "micam: 尚未配置，请在「应用设置」里填写账号与摄像头 DID" >&2
+          while :; do sleep 3600; done
+        fi
+
+        # 没有 token 也没有缓存会话时同样等待：此时启动必然失败。
+        if [ ! -s /etc/micam/pass_token ] && [ ! -f /data/.micam/credentials.json ]; then
+          echo "micam: 尚未配置 passToken，请在「应用设置」里填写后保存" >&2
           while :; do sleep 3600; done
         fi
 

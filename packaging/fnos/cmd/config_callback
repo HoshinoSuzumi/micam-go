@@ -23,7 +23,7 @@ MICAM_QUALITY=${wizard_quality:-3}
 MICAM_PTS_LEAD=${wizard_pts_lead:-100}
 MICAM_LAN=${wizard_lan:-prefer}
 MICAM_RECONNECT=5
-MICAM_PASS_TOKEN_FILE=/run/secrets/pass_token
+MICAM_PASS_TOKEN_FILE=/etc/micam/pass_token
 EOF
 chmod 600 "$ETC/micam.env"
 
