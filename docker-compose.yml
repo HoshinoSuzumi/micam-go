@@ -6,36 +6,32 @@ services:
     restart: unless-stopped
     stop_grace_period: 20s
 
-    # UDP egress to the rendezvous servers and the relay must not be blocked.
-    # No inbound ports are needed for the P2P path; 8554 is only for players.
-    ports:
-      - "8554:8554"
-
-    # --- 想要局域网直连的话 -------------------------------------------------
-    # Docker 默认的 bridge 网络不会把 255.255.255.255 广播送到物理网段，
-    # 摄像头收不到 LAN_SEARCH，就会静默退回中继。要用直连就把下面的 ports
-    # 整段注释掉，并取消 network_mode 的注释（host 模式不能同时发布端口）。
-    #
-    # network_mode: host
-    # ----------------------------------------------------------------------
+    # host 网络是默认，也是这里唯一能拿到局域网直连的方式：
+    # LAN 搜索发往 255.255.255.255，Docker 的 bridge 不会把它送到物理网段，
+    # 摄像头收不到就会静默退回中继。
+    # host 模式下不能同时写 ports:，8554 直接开在宿主机上。
+    network_mode: host
 
     environment:
       MICAM_USER: "${MICAM_USER}"
       MICAM_REGION: "${MICAM_REGION:-cn}"
       MICAM_DID: "${MICAM_DID}"
-      # Prefer a file over an environment variable: env values are visible in
-      # `docker inspect` output.
+
+      # 优先用文件而不是环境变量：env 会出现在 docker inspect 里。
       MICAM_PASS_TOKEN_FILE: /run/secrets/pass_token
+
       MICAM_BIND: 0.0.0.0
       MICAM_PORT: "8554"
-      MICAM_QUALITY: "2"
-      # Reconnect inside the container instead of waiting for a restart.
+      # 实测 xiaomi.camera.92ac1 的 3 才是全分辨率；老机型若花屏改回 2。
+      MICAM_QUALITY: "${MICAM_QUALITY:-3}"
+      MICAM_PTS_LEAD: "${MICAM_PTS_LEAD:-100}"
       MICAM_RECONNECT: "${MICAM_RECONNECT:-5}"
+      MICAM_LAN: "${MICAM_LAN:-prefer}"
 
     volumes:
-      # Credentials and the cached session live here.
+      # 凭据与会话；属主必须是 10001（见 Dockerfile），绑定挂载前先 chown。
       - ./data:/data
-      # A passToken is roughly as powerful as the account password.
+      # passToken 近似等价于账号密码，只读挂载。
       - ./secrets/pass_token:/run/secrets/pass_token:ro
 
     logging:
@@ -43,3 +39,8 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+# 跨网段部署（VPS、摄像头不在同一局域网）时改用 bridge：
+#   1. 注释掉上面的 network_mode: host
+#   2. 加回 ports: ["8554:8554"]
+#   3. 设 MICAM_LAN=off，省掉必然失败的 3 秒广播等待

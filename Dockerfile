@@ -23,6 +23,11 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates \
  && adduser -D -H -u 10001 micam
 
+# The session file is written here, so the directory must belong to the user that
+# runs the process. Without this a bind-mounted ./data stays root-owned and the
+# first start fails with "cannot write the credentials".
+RUN mkdir -p /data && chown -R micam:micam /data
+
 COPY --from=build /out/micam /usr/local/bin/micam
 
 # HOME points at the volume, so the credentials land on persistent storage.

@@ -8,6 +8,9 @@
 /data/
 /secrets/
 
+# local deployment settings
+/.env
+
 # local toolchains and caches
 /.tmp/
 
