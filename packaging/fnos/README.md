@@ -44,6 +44,20 @@ make fpk
 3. 应用卡片显示运行状态，可启动/停止；点开是 `app/www/index.html`，给出播放地址；
 4. 凭据缓存在 `var/`，重装或升级后不需要重新登录。
 
+## 配置归属
+
+同一个值只在一个地方定义，避免"改了挂载点却忘了改配置"：
+
+| 值 | 由谁决定 |
+|---|---|
+| `MICAM_BIND` `MICAM_PORT` | `app/docker/docker-compose.yaml` |
+| `MICAM_PASS_TOKEN_FILE` | 同上（挂载点就是 `/etc/micam`） |
+| `MICAM_USER` `MICAM_USER_ID` `MICAM_REGION` `MICAM_DID` | `etc/micam.env`，由向导写入 |
+| `MICAM_QUALITY` `MICAM_PTS_LEAD` `MICAM_LAN` `MICAM_RECONNECT` | 同上 |
+
+旧版本的 `micam.env` 里还留着前三项，`install_callback` 与 `upgrade_callback` 会把它们删掉；
+entrypoint 另外强制设置一次 `MICAM_PASS_TOKEN_FILE`，作为没走升级流程时的兜底。
+
 ## 几处需要真机确认的地方
 
 这个包是照着官方文档写的，没有 fnOS 设备做端到端验证。已知的不确定点：

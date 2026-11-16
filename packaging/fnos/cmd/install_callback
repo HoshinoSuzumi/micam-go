@@ -1,8 +1,9 @@
 #!/bin/sh
 # 安装后：准备配置目录、默认 env 与空的 token 文件。
 #
-# compose 里 env_file 指向 micam.env，文件不存在会让 compose 直接失败，所以
-# 这一步必须保证两个文件都在。脚本可重复执行。
+# micam.env 只放"用户可配置"的值：账号、DID、清晰度这类。端口、监听地址、
+# token 路径由 docker-compose.yaml 决定 —— 同一个事实只写一处，否则改了挂载点
+# 而忘了改这里，程序就会去找一个不存在的文件（踩过）。
 set -eu
 
 ETC="${TRIM_PKGETC:-/var/apps/micam/etc}"
@@ -13,20 +14,23 @@ mkdir -p "$ETC" "$VAR"
 if [ ! -f "$ETC/micam.env" ]; then
     umask 077
     cat > "$ETC/micam.env" <<'EOF'
-MICAM_BIND=0.0.0.0
-MICAM_PORT=8554
 MICAM_REGION=cn
 MICAM_QUALITY=3
 MICAM_PTS_LEAD=100
 MICAM_LAN=prefer
 MICAM_RECONNECT=5
-MICAM_PASS_TOKEN_FILE=/etc/micam/pass_token
 EOF
 fi
 
 if [ ! -f "$ETC/pass_token" ]; then
     umask 077
     : > "$ETC/pass_token"
+fi
+
+# 老版本的 micam.env 里还写着监听地址、端口和 token 路径。这些现在由
+# docker-compose.yaml 决定，留在文件里会盖掉 compose 的设置，删掉。
+if [ -f "$ETC/micam.env" ]; then
+    sed -i '/^MICAM_BIND=/d; /^MICAM_PORT=/d; /^MICAM_PASS_TOKEN_FILE=/d' "$ETC/micam.env" || true
 fi
 
 chmod 600 "$ETC/micam.env" "$ETC/pass_token" 2>/dev/null || true

@@ -1,6 +1,9 @@
 #!/bin/sh
 # 配置变更后：把向导收集到的值写成 env 文件与 token 文件，再重建容器。
 #
+# 只写"用户可配置"的值。监听地址、端口、token 路径由 docker-compose.yaml
+# 决定，同一个事实只写一处。
+#
 # 向导值来自同名字段：wizard_user / wizard_user_id / wizard_region /
 # wizard_did / wizard_quality / wizard_lan / wizard_pts_lead / wizard_pass_token。
 set -eu
@@ -13,8 +16,6 @@ mkdir -p "$ETC" "$VAR"
 umask 077
 
 cat > "$ETC/micam.env" <<EOF
-MICAM_BIND=0.0.0.0
-MICAM_PORT=8554
 MICAM_USER=${wizard_user:-}
 MICAM_USER_ID=${wizard_user_id:-}
 MICAM_REGION=${wizard_region:-cn}
@@ -23,7 +24,6 @@ MICAM_QUALITY=${wizard_quality:-3}
 MICAM_PTS_LEAD=${wizard_pts_lead:-100}
 MICAM_LAN=${wizard_lan:-prefer}
 MICAM_RECONNECT=5
-MICAM_PASS_TOKEN_FILE=/etc/micam/pass_token
 EOF
 chmod 600 "$ETC/micam.env"
 

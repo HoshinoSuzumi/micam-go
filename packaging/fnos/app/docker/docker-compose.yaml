@@ -24,8 +24,8 @@ services:
         [ -f /etc/micam/micam.env ] && . /etc/micam/micam.env
         set +a
 
-        # token 路径由挂载点决定。旧版本的配置文件里可能还写着
-        # /run/secrets/pass_token，这里强制覆盖，不让它把程序指到空处。
+        # token 路径由挂载点决定，配置文件里不再写它。这一行是为了从旧版本升级：
+        # 老包写下的 micam.env 里还留着 /run/secrets/pass_token。
         MICAM_PASS_TOKEN_FILE=/etc/micam/pass_token
         export MICAM_PASS_TOKEN_FILE
 

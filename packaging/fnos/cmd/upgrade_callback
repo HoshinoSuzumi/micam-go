@@ -1,11 +1,19 @@
 #!/bin/sh
-# 升级后：拉新镜像并重新启动。配置和凭据都被保留，不需要重新登录。
+# 升级后：清理旧配置、拉新镜像并重新启动。
+#
+# 配置和凭据都被保留，不需要重新登录。
 set -eu
 
+ETC="${TRIM_PKGETC:-/var/apps/micam/etc}"
 COMPOSE_FILE="${TRIM_APPDEST:-/var/apps/micam/target}/docker/docker-compose.yaml"
+
+# 旧版本把监听地址、端口、token 路径写在 micam.env 里，现在由 compose 决定。
+if [ -f "$ETC/micam.env" ]; then
+    sed -i '/^MICAM_BIND=/d; /^MICAM_PORT=/d; /^MICAM_PASS_TOKEN_FILE=/d' "$ETC/micam.env" || true
+fi
 
 if [ -f "$COMPOSE_FILE" ]; then
     docker compose -f "$COMPOSE_FILE" -p micam pull
-    docker compose -f "$COMPOSE_FILE" -p micam up -d
+    docker compose -f "$COMPOSE_FILE" -p micam up -d --force-recreate
 fi
 exit 0
