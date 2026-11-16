@@ -15,15 +15,14 @@ const (
 	readTimeout       = 500 * time.Millisecond
 )
 
-// Conn carries application data over an established relay session.
+// Conn carries application data over an established session.
 //
 // It owns the receive loop and everything the peer expects us to keep doing:
-// acknowledging DRW fragments, answering keepalives, and answering the relay's
-// repeated 0x28 linking request. Neglecting any of these raises no error - the
-// stream simply stops.
+// acknowledging DRW fragments on UDP, answering keepalives, and answering the
+// relay's repeated 0x28 linking request. Neglecting any of these raises no error
+// - the stream simply stops.
 type Conn struct {
-	conn  *net.UDPConn
-	relay *net.UDPAddr
+	link  Link
 	local Addr
 	log   *slog.Logger
 
@@ -42,14 +41,13 @@ type Conn struct {
 }
 
 // NewConn wraps an established session. local is what the 0x28 reply reports as
-// our address.
-func NewConn(conn *net.UDPConn, relay *net.UDPAddr, local Addr, log *slog.Logger) *Conn {
+// our address; it is only used on the relay path.
+func NewConn(link Link, local Addr, log *slog.Logger) *Conn {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Conn{
-		conn:         conn,
-		relay:        relay,
+		link:         link,
 		local:        local,
 		log:          log,
 		cmdChannel:   NewChannel(ChannelCommand),
@@ -62,7 +60,32 @@ func NewConn(conn *net.UDPConn, relay *net.UDPAddr, local Addr, log *slog.Logger
 
 // Start begins the receive loop. Safe to call once.
 func (c *Conn) Start() {
-	c.startOnce.Do(func() { go c.readLoop() })
+	c.startOnce.Do(func() {
+		go c.readLoop()
+		if c.link.Reliable() {
+			// A TCP session idles out without traffic; the vendor app sends a
+			// ping roughly once a second.
+			go c.keepaliveLoop()
+		}
+	})
+}
+
+func (c *Conn) keepaliveLoop() {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	ping := EncodeFrame(MsgAlive, nil)
+	for {
+		select {
+		case <-c.closed:
+			return
+		case <-ticker.C:
+			if err := c.link.WriteFrame(ping); err != nil {
+				c.log.Debug("keepalive failed", "err", err)
+				return
+			}
+		}
+	}
 }
 
 // Done is closed when the session ends.
@@ -117,11 +140,11 @@ func (c *Conn) take(ctx context.Context, queue chan []byte) ([]byte, bool) {
 	}
 }
 
-// Close tells the peer we are leaving, stops the reader and releases the socket.
+// Close tells the peer we are leaving, stops the reader and releases the link.
 func (c *Conn) Close() error {
 	c.markClosed()
 	_ = c.sendRaw(EncodeFrame(MsgClose, nil))
-	return c.conn.Close()
+	return c.link.Close()
 }
 
 func (c *Conn) markClosed() {
@@ -142,10 +165,10 @@ func (c *Conn) isClosed() bool {
 func (c *Conn) readLoop() {
 	buf := make([]byte, 4096)
 	for !c.isClosed() {
-		if err := c.conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
+		if err := c.link.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
 			return
 		}
-		n, from, err := c.conn.ReadFromUDP(buf)
+		n, err := c.link.ReadFrame(buf)
 		if err != nil {
 			if c.isClosed() {
 				return
@@ -157,16 +180,19 @@ func (c *Conn) readLoop() {
 			c.markClosed()
 			return
 		}
+		if n == 0 {
+			continue
+		}
 
 		frame, ok := ParseFrame(buf[:n])
 		if !ok {
 			continue
 		}
-		c.handle(frame, from)
+		c.handle(frame)
 	}
 }
 
-func (c *Conn) handle(frame Frame, from *net.UDPAddr) {
+func (c *Conn) handle(frame Frame) {
 	switch frame.Type {
 	case MsgDRW:
 		c.onData(frame.Payload)
@@ -177,7 +203,7 @@ func (c *Conn) handle(frame Frame, from *net.UDPAddr) {
 	case MsgSetup:
 		c.onSetup(frame.Payload)
 	case MsgClose:
-		c.log.Debug("peer closed the session", "from", from.String())
+		c.log.Debug("peer closed the session", "peer", c.link.Describe())
 		c.markClosed()
 	}
 }
@@ -188,10 +214,13 @@ func (c *Conn) onData(payload []byte) {
 		return
 	}
 
-	// Acknowledge even duplicates: a repeat means the peer never saw our
-	// previous ack.
-	if err := c.sendRaw(AckFrame(channel, seq)); err != nil {
-		c.log.Debug("cannot ack a fragment", "err", err)
+	// UDP loses fragments, so every one is acknowledged - duplicates included: a
+	// repeat means the peer never saw the previous ack. TCP guarantees delivery
+	// and needs none of this.
+	if !c.link.Reliable() {
+		if err := c.sendRaw(AckFrame(channel, seq)); err != nil {
+			c.log.Debug("cannot ack a fragment", "err", err)
+		}
 	}
 
 	var target *Channel
@@ -205,7 +234,11 @@ func (c *Conn) onData(payload []byte) {
 		return
 	}
 
-	target.Push(seq, data)
+	if c.link.Reliable() {
+		target.PushReliable(data)
+	} else {
+		target.Push(seq, data)
+	}
 	for {
 		message := target.Poll()
 		if message == nil {
@@ -237,6 +270,5 @@ func (c *Conn) onSetup(payload []byte) {
 }
 
 func (c *Conn) sendRaw(datagram []byte) error {
-	_, err := c.conn.WriteToUDP(datagram, c.relay)
-	return err
+	return c.link.WriteFrame(datagram)
 }

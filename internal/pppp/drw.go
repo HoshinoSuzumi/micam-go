@@ -63,6 +63,16 @@ func (c *Channel) Push(seq uint16, data []byte) bool {
 	return true
 }
 
+// PushReliable appends data in arrival order.
+//
+// TCP guarantees ordering and delivery, so sequence bookkeeping is not only
+// unnecessary but harmful: a TCP session legitimately starts at an arbitrary
+// sequence number, and waiting for zero would stall it forever.
+func (c *Channel) PushReliable(data []byte) {
+	c.buf = append(c.buf, data...)
+	c.extract()
+}
+
 // Poll returns the next complete message, or nil when none is ready.
 func (c *Channel) Poll() []byte {
 	if len(c.messages) == 0 {

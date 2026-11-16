@@ -94,15 +94,13 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 		return exitSession, false
 	}
 
-	sock, peer, err := dialCamera(ctx, opts, target, uid, prov, log)
+	link, local, err := dialCamera(ctx, opts, target, uid, prov, log)
 	if err != nil {
 		log.Error("cannot reach the camera", "err", err)
 		return exitSession, true
 	}
-	defer sock.Close()
 
-	local := localEndpoint(sock, peer)
-	conn := pppp.NewConn(sock, peer, local, log)
+	conn := pppp.NewConn(link, local, log)
 	conn.Start()
 	defer conn.Close()
 
@@ -197,20 +195,20 @@ const lanHandshakeTimeout = 3 * time.Second
 // free when the camera is remote or behind another subnet: it fails in a few
 // hundred milliseconds and the relay path runs unchanged.
 func dialCamera(ctx context.Context, opts *cli.Options, target cloud.Device, uid pppp.UID,
-	prov *cloud.Provisioning, log *slog.Logger) (*net.UDPConn, *net.UDPAddr, error) {
+	prov *cloud.Provisioning, log *slog.Logger) (pppp.Link, pppp.Addr, error) {
 
 	if opts.LAN != cli.LANOff && target.LocalIP != "" {
 		ip, err := netip.ParseAddr(target.LocalIP)
 		if err != nil {
 			log.Debug("the camera reports no usable local address", "localip", target.LocalIP)
 		} else {
-			sock, peer, lanErr := pppp.LANHandshake(uid, ip, lanHandshakeTimeout, log)
+			link, lanErr := pppp.LANHandshake(uid, ip, lanHandshakeTimeout, log)
 			if lanErr == nil {
-				log.Info("direct local session", "camera", ip.String(), "peer", peer.String())
-				return sock, peer, nil
+				log.Info("direct local session", "camera", ip.String(), "transport", link.Describe())
+				return link, pppp.Addr{}, nil
 			}
 			if opts.LAN == cli.LANOnly {
-				return nil, nil, lanErr
+				return nil, pppp.Addr{}, lanErr
 			}
 			log.Warn("no direct local session, using the relay",
 				"camera", target.LocalIP, "err", lanErr)
@@ -219,16 +217,18 @@ func dialCamera(ctx context.Context, opts *cli.Options, target cloud.Device, uid
 
 	sock, err := net.ListenUDP("udp4", nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("cannot open a UDP socket: %w", err)
+		return nil, pppp.Addr{}, fmt.Errorf("cannot open a UDP socket: %w", err)
 	}
 
 	log.Info("connecting via the CS2 relay", "p2p_id", prov.P2PID, "servers", len(prov.Servers))
 	sess, err := pppp.Dial(ctx, sock, uid, prov.Servers, opts.ConnectTimeout, log)
 	if err != nil {
 		sock.Close()
-		return nil, nil, fmt.Errorf("%w (if the Mi Home app is holding this camera, close it and retry)", err)
+		return nil, pppp.Addr{}, fmt.Errorf("%w (if the Mi Home app is holding this camera, close it and retry)", err)
 	}
-	return sock, sess.Relay(), nil
+
+	local := localEndpoint(sock, sess.Relay())
+	return pppp.NewUDPLink(sock, sess.Relay()), local, nil
 }
 
 // localEndpoint reports the address we present to the relay in the 0x28 reply:

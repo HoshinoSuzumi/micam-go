@@ -206,7 +206,7 @@ func TestRelayHandshakeAndSession(t *testing.T) {
 	}
 
 	local := AddrFromUDP(sock.LocalAddr().(*net.UDPAddr))
-	conn := NewConn(sock, sess.Relay(), local, discardLogger())
+	conn := NewConn(NewUDPLink(sock, sess.Relay()), local, discardLogger())
 	conn.Start()
 	defer conn.Close()
 

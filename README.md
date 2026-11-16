@@ -104,8 +104,12 @@ micam --list-cameras --region cn --user <账号> --pass-token <token>
    之后就是普通的 DRW / MISS 流量，与中继路径完全一致
 ```
 
-失败时（不在同一网段、摄像头只提供 `cs2+tcp`、或 3 秒内无响应）自动回落中继，日志留一条
+失败时（不在同一网段、摄像头不响应搜索、或 3 秒内无应答）自动回落中继，日志留一条
 `no direct local session, using the relay` 的 WARN。
+
+两种传输都支持：摄像头可以在 `P2P_RDY` 里选择 **UDP**，也可以选择 **TCP**（`cs2+tcp`，
+`xiaomi.camera.92ac1` 这类新机型就是）。TCP 更稳——不受 MTU 与丢包影响——但少了 UDP 的
+乱序重组，代码里按传输能力自动切换。
 
 注意两点：摄像头必须与 micam 在**同一网段**；`localip` 是摄像头自己上报的，换了网络可能过期。
 `--lan only` 可以强制只走局域网（调试用），`--lan off` 则完全跳过这次尝试。
