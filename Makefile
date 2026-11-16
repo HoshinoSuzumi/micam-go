@@ -3,7 +3,7 @@ BIN ?= micam
 
 # Registry coordinates for the image targets. Override on the command line:
 #   make docker-push IMAGE=youruser/micam TAG=0.4.0
-IMAGE ?= micam
+IMAGE ?= hoshinosuzumi/micam-go
 TAG ?= dev
 
 .PHONY: fmt vet test build cross docker docker-push docker-push-multi clean

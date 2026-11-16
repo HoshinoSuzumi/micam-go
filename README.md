@@ -163,15 +163,28 @@ printf '%s' "$PASS_TOKEN" > secrets/pass_token
 
 ## Docker（ARM fnOS）
 
+镜像由 GitHub Actions 构建，本机不需要 Docker：
+
+| 来源 | 地址 |
+|---|---|
+| Docker Hub | `hoshinosuzumi/micam-go` |
+| GHCR | `ghcr.io/<你的 GitHub 用户名>/micam-go` |
+
 ```sh
 git clone <repo> micam && cd micam
 cp .env.example .env                     # 填 MICAM_USER / MICAM_REGION / MICAM_DID
 mkdir -p data secrets
-printf '%s' '<passToken>' > secrets/pass_token && chmod 600 secrets/pass_token
-sudo chown -R 10001:10001 data           # 容器以 uid 10001 运行
-docker compose up -d --build
+printf '%s' '<passToken>' > secrets/pass_token
+sudo chown -R 10001:10001 data                 # 容器以 uid 10001 运行
+sudo chown 10001:10001 secrets/pass_token      # 否则容器读不到 token
+sudo chmod 400 secrets/pass_token
+docker compose pull
+docker compose up -d
 docker compose logs -f
 ```
+
+本地改代码调试时，把 compose 里的 `image:` 注释掉、取消 `build: .` 的注释，再
+`docker compose up -d --build`。
 
 镜像默认 `MICAM_BIND=0.0.0.0`、`HOME=/data`，凭据落在 `./data`。
 上游硬编码 `127.0.0.1` 的问题在这里不存在——Go 版直接监听可配置地址，不需要 socat。
@@ -188,6 +201,27 @@ docker compose logs -f
 ```sh
 docker compose logs | grep -E "direct local session|connecting via"
 ```
+
+### 发布新镜像
+
+```sh
+git tag v0.4.0
+git push origin v0.4.0
+```
+
+`.github/workflows/release.yml` 会先跑 `go vet` 和测试，然后构建
+`linux/amd64` + `linux/arm64` 的多架构镜像并推送，同时把两个架构的静态二进制
+上传为工作流产物（不装 Docker 也能直接 `scp` 到 NAS 跑）。
+
+GHCR 只需要 `GITHUB_TOKEN`，无需配置。要同时推 Docker Hub，在仓库
+**Settings → Secrets and variables → Actions** 里加：
+
+| Secret | 值 |
+|---|---|
+| `DOCKERHUB_USERNAME` | Docker Hub 用户名 |
+| `DOCKERHUB_TOKEN` | Account Settings 里创建的 Access Token（Read & Write） |
+
+没有这两个 secret 时，工作流只推 GHCR，不会失败。
 
 ⚠️ 这个流**没有任何鉴权**。只把它发布在可信网段，或前面挂一层带认证的反代。
 
