@@ -21,6 +21,8 @@ const (
 	MsgPunchTo  byte = 0x40
 	MsgPunchPkt byte = 0x41
 	MsgP2PRdy   byte = 0x42
+	// MsgP2PRdyTCP offers the session over TCP instead of UDP.
+	MsgP2PRdyTCP byte = 0x43
 
 	MsgListReq1   byte = 0x67
 	MsgListReq    byte = 0x68
@@ -59,6 +61,7 @@ var msgNames = map[byte]string{
 	MsgPunchTo:       "PUNCH_TO",
 	MsgPunchPkt:      "PUNCH_PKT",
 	MsgP2PRdy:        "P2P_RDY",
+	MsgP2PRdyTCP:     "P2P_RDY_TCP",
 	MsgListReq1:      "LIST_REQ1",
 	MsgListReq:       "LIST_REQ",
 	MsgListReqAck:    "LIST_REQ_ACK",

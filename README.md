@@ -68,6 +68,7 @@ micam --did 1234567890 --region cn --port 8554
 | `--list-cameras` | off | 只登录并列出摄像头（DID / 型号 / 在线状态）后退出，不连中继、不开端口 |
 | `--reconnect` | `0` | 断流后自动重连的次数；`0` 表示不重连，交给编排层重启 |
 | `--data-dir` | `~/.micam` | 存放 `credentials.json` 的目录；家目录不可写时用它换位置 |
+| `--lan` | `prefer` | `prefer` 先试局域网直连、失败回落中继；`only` 只用局域网；`off` 只用中继 |
 | `--connect-timeout` | `90` | 中继握手总超时（秒） |
 | `--pass-token` | — | 浏览器复制的 `passToken`，免密码免 2FA |
 | `--relogin` | off | 丢弃缓存会话重新登录 |
@@ -89,6 +90,25 @@ micam --list-cameras --region cn --user <账号> --pass-token <token>
 ```
 
 只做登录与 `device_list`，不建 UDP 会话、不占 HTTP 端口——最省事的查询方式。
+
+### 局域网直连
+
+默认 `--lan prefer`：先用 `device_list` 里的 `localip`，在摄像头的 **UDP 32108** 上直接尝试
+建立会话。成功的话**完全不走中继**，延迟从几十毫秒降到个位数，也不受云端抖动影响：
+
+```
+-> camera:32108   LAN_SEARCH
+<-                PUNCH_PKT
+->                原样回送该包
+<-                P2P_RDY        （此后对端端口 = 摄像头会话端口）
+   之后就是普通的 DRW / MISS 流量，与中继路径完全一致
+```
+
+失败时（不在同一网段、摄像头只提供 `cs2+tcp`、或 3 秒内无响应）自动回落中继，日志留一条
+`no direct local session, using the relay` 的 WARN。
+
+注意两点：摄像头必须与 micam 在**同一网段**；`localip` 是摄像头自己上报的，换了网络可能过期。
+`--lan only` 可以强制只走局域网（调试用），`--lan off` 则完全跳过这次尝试。
 
 退出码与上游一致：`1` 无摄像头/传输不支持，`2` 登录或 2FA，`3` 中继失败，`4` 离线，
 `5` 无媒体，`6` 端口占用。

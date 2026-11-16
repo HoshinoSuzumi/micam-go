@@ -33,7 +33,18 @@ type Options struct {
 	ShowVersion    bool
 	ListCameras    bool
 	Reconnect      int
+	LAN            string
 }
+
+// Values for --lan.
+const (
+	// LANPrefer tries a direct local session first and falls back to the relay.
+	LANPrefer = "prefer"
+	// LANOnly refuses to use the relay at all.
+	LANOnly = "only"
+	// LANOff skips the local attempt entirely.
+	LANOff = "off"
+)
 
 // Parse reads the command line, falling back to environment variables for the
 // values that a container deployment wants to supply without a TTY.
@@ -75,6 +86,8 @@ func Parse(args []string) (*Options, error) {
 		"log in, print the cameras on the account and exit")
 	fs.IntVar(&opts.Reconnect, "reconnect", envIntOr("MICAM_RECONNECT", 0),
 		"retry the stream this many times when it ends (0 disables)")
+	fs.StringVar(&opts.LAN, "lan", envOr("MICAM_LAN", LANPrefer),
+		"prefer|only|off: try a direct local-network session before the relay")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -101,6 +114,13 @@ func Parse(args []string) (*Options, error) {
 	}
 	if opts.Reconnect < 0 {
 		return nil, fmt.Errorf("reconnect must be >= 0, got %d", opts.Reconnect)
+	}
+
+	opts.LAN = strings.ToLower(strings.TrimSpace(opts.LAN))
+	switch opts.LAN {
+	case LANPrefer, LANOnly, LANOff:
+	default:
+		return nil, fmt.Errorf("lan must be prefer, only or off, got %q", opts.LAN)
 	}
 
 	return opts, nil

@@ -89,6 +89,37 @@ func TestParseDataDir(t *testing.T) {
 	}
 }
 
+func TestParseLAN(t *testing.T) {
+	clearEnv(t)
+
+	opts, err := Parse(nil)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if opts.LAN != LANPrefer {
+		t.Fatalf("lan = %q, want %q by default", opts.LAN, LANPrefer)
+	}
+
+	for _, tc := range []struct{ in, want string }{
+		{"only", LANOnly},
+		{"off", LANOff},
+		{"OFF", LANOff},
+		{" prefer ", LANPrefer},
+	} {
+		opts, err := Parse([]string{"--lan", tc.in})
+		if err != nil {
+			t.Fatalf("Parse(--lan %q): %v", tc.in, err)
+		}
+		if opts.LAN != tc.want {
+			t.Fatalf("--lan %q became %q, want %q", tc.in, opts.LAN, tc.want)
+		}
+	}
+
+	if _, err := Parse([]string{"--lan", "sometimes"}); err == nil {
+		t.Fatal("an unknown --lan value must be rejected")
+	}
+}
+
 func TestParseRejectsNegativeReconnect(t *testing.T) {
 	clearEnv(t)
 
