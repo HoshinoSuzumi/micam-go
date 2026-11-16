@@ -14,19 +14,26 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+// packet builds one HEVC access unit.
 func packet(seq uint32, keyframe bool, timestampMS int64) miss.Packet {
 	payload := make([]byte, 600)
 	copy(payload, []byte{0x00, 0x00, 0x00, 0x01})
+
 	flags := uint32(0)
 	if keyframe {
 		flags = 1
 	}
+
 	return miss.Packet{Codec: miss.CodecH265, Seq: seq, Flags: flags, TimestampMS: timestampMS, Payload: payload}
 }
 
 func startServer(t *testing.T) *Server {
 	t.Helper()
-	server := New(Config{Addr: "127.0.0.1:0", Path: "/cam.ts"}, testLogger())
+	server := New(Config{
+		Addr:      "127.0.0.1:0",
+		Path:      "/cam.ts",
+		PTSLeadMS: 300, // the production default; the PTS assertions below rely on it
+	}, testLogger())
 	if err := server.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -129,6 +136,44 @@ func TestRejectsNonGet(t *testing.T) {
 
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405", resp.StatusCode)
+	}
+}
+
+// TestViewerResyncsAtKeyframe pins the recovery rule: when a viewer falls
+// behind, the backlog is discarded and the stream restarts at a keyframe. Sending
+// a P-frame into a hole produces "Could not find ref with POC ..." on the
+// decoder and corrupts everything until the next I-frame.
+func TestViewerResyncsAtKeyframe(t *testing.T) {
+	v := &viewer{frames: make(chan miss.Packet, 2), log: testLogger()}
+
+	v.offer(packet(0, true, 0))
+	v.offer(packet(1, false, 50))
+	if got := len(v.frames); got != 2 {
+		t.Fatalf("queue = %d, want 2", got)
+	}
+
+	// Overflow on a P-frame: nothing can be shown, so the backlog goes.
+	v.offer(packet(2, false, 100))
+	if got := len(v.frames); got != 0 {
+		t.Fatalf("backlog = %d, want 0 after a resync", got)
+	}
+	if v.resyncs != 1 {
+		t.Fatalf("resyncs = %d, want 1", v.resyncs)
+	}
+
+	// P-frames must not restart the stream mid-GOP.
+	v.offer(packet(3, false, 150))
+	if got := len(v.frames); got != 0 {
+		t.Fatalf("a P-frame restarted the stream: queue = %d", got)
+	}
+
+	// A keyframe does.
+	v.offer(packet(4, true, 200))
+	if got := len(v.frames); got != 1 {
+		t.Fatalf("keyframe was not accepted: queue = %d", got)
+	}
+	if !v.started {
+		t.Fatal("the viewer should be streaming again")
 	}
 }
 

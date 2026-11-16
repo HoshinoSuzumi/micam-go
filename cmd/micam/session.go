@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"log/slog"
 	"net"
@@ -117,14 +118,23 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 	}
 	media.UseSessionKey(key)
 
+	log.Info("requesting video", "quality", opts.Quality, "pts_lead_ms", opts.PTSLeadMS)
 	if err := media.StartVideo(opts.Quality, false); err != nil {
 		log.Error("cannot start the video stream", "err", err)
 		return exitSession, true
 	}
 	defer func() { _ = media.StopVideo() }()
 
+	if opts.Dump != "" {
+		return dumpStream(ctx, media, opts, log)
+	}
+
 	addr := net.JoinHostPort(opts.Bind, strconv.Itoa(opts.Port))
-	server := stream.New(stream.Config{Addr: addr, Path: "/cam.ts"}, log)
+	server := stream.New(stream.Config{
+		Addr:      addr,
+		Path:      "/cam.ts",
+		PTSLeadMS: opts.PTSLeadMS,
+	}, log)
 	if err := server.Start(); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "in use") {
 			log.Error("port already in use", "port", opts.Port, "hint", "pass --port to pick another")
@@ -150,6 +160,13 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 	frames := 0
 	var streamErr error
 	for ctx.Err() == nil {
+		// The camera keeps talking on channel 0 while it streams. Nothing here
+		// needs those messages, but consuming them keeps the bounded queue from
+		// overflowing, and logging the ids shows what we are ignoring.
+		if command, ok := conn.TryNextCommand(); ok && len(command) >= 4 {
+			log.Debug("camera command", "cmd", fmt.Sprintf("0x%03x", binary.BigEndian.Uint32(command[:4])))
+		}
+
 		packet, ok, err := media.NextMedia(ctx)
 		if err != nil {
 			streamErr = err
@@ -164,7 +181,8 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 		server.Publish(packet)
 		frames++
 		if frames%600 == 0 {
-			log.Info("relaying", "frames", frames, "viewers", server.Viewers(), "codec", packet.CodecName())
+			log.Info("relaying", "frames", frames, "viewers", server.Viewers(),
+				"resyncs", server.Resyncs(), "codec", packet.CodecName())
 		}
 	}
 

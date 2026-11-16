@@ -14,3 +14,7 @@
 # logs and editor noise
 *.log
 .DS_Store
+
+# captures produced by --dump and by curl
+*.h265
+*.ts

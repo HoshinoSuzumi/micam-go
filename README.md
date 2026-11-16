@@ -64,18 +64,22 @@ micam --did 1234567890 --region cn --port 8554
 | `--did` | 提示 | 要取流的摄像头 DID |
 | `--bind` | `127.0.0.1` | HTTP 监听地址；容器里用 `0.0.0.0` |
 | `--port` | `8554` | HTTP 端口 |
-| `--quality` | `2` | 0 auto / 1 SD / 2 HD / 3 full |
+| `--quality` | `2` | 0 auto / 1 SD / 2 HD / 3 full；协议支持到 5，新机型常把全分辨率放在 3 |
+| `--pts-lead` | `100` | 画面提前量（毫秒）：越小越跟手，越大对软件解码越宽容 |
 | `--list-cameras` | off | 只登录并列出摄像头（DID / 型号 / 在线状态）后退出，不连中继、不开端口 |
 | `--reconnect` | `0` | 断流后自动重连的次数；`0` 表示不重连，交给编排层重启 |
 | `--data-dir` | `~/.micam` | 存放 `credentials.json` 的目录；家目录不可写时用它换位置 |
 | `--lan` | `prefer` | `prefer` 先试局域网直连、失败回落中继；`only` 只用局域网；`off` 只用中继 |
+| `--dump` | — | 把解密后的裸码流存到文件，不对外提供 HTTP |
+| `--dump-seconds` | `5` | `--dump` 的抓取时长 |
 | `--connect-timeout` | `90` | 中继握手总超时（秒） |
 | `--pass-token` | — | 浏览器复制的 `passToken`，免密码免 2FA |
 | `--relogin` | off | 丢弃缓存会话重新登录 |
 | `--verbose` | off | 逐包打印 PPPP |
 
 环境变量：`MICAM_USER` `MICAM_USER_ID` `MICAM_REGION` `MICAM_DID` `MICAM_PASS_TOKEN`
-`MICAM_PASS_TOKEN_FILE` `MICAM_BIND` `MICAM_PORT` `MICAM_QUALITY` `MICAM_RECONNECT`。
+`MICAM_PASS_TOKEN_FILE` `MICAM_BIND` `MICAM_PORT` `MICAM_QUALITY` `MICAM_PTS_LEAD`
+`MICAM_RECONNECT` `MICAM_LAN`。
 
 ### 先拿到 DID
 
@@ -116,6 +120,35 @@ micam --list-cameras --region cn --user <账号> --pass-token <token>
 
 退出码与上游一致：`1` 无摄像头/传输不支持，`2` 登录或 2FA，`3` 中继失败，`4` 离线，
 `5` 无媒体，`6` 端口占用。
+
+### 画面与延迟
+
+**画面不如米家 App 清晰**：先看码流实际分辨率。
+
+```sh
+ffprobe -v error -select_streams v -show_entries stream=width,height -of csv=p=0 http://127.0.0.1:8554/cam.ts
+```
+
+低于手机上看到的，就把 `--quality` 往上调。`2` 通常是 HD，`3` 才是全分辨率（实测
+`xiaomi.camera.92ac1` 如此），部分型号还接受 `4`/`5`；摄像头会忽略不认识的值。
+
+**延迟**由这几层叠加，从上到下影响递减：
+
+| 来源 | 量级 | 怎么减 |
+|---|---|---|
+| 播放器缓冲 | 2–10s | 换硬解播放器（mpv `--hwdec=auto`、PotPlayer），或调小其缓存 |
+| PTS 提前量 | `--pts-lead`，默认 100ms | 调到 0 最跟手，代价是软件解码容易丢帧 |
+| 观众队列 | ≤ 25 帧（约 1.2s） | 落后时整段丢弃并重同步到关键帧，不会累积 |
+| 传输 | 局域网 <10ms / 中继 20–80ms | 用 `--lan prefer` |
+
+**关于 `<codec> @ ... Could not find ref with POC ...` 这类报错**：先确认是不是播放器的问题。
+
+```sh
+ffmpeg -v error -i http://127.0.0.1:8554/cam.ts -t 10 -f null -
+```
+
+输出为空说明我们发出的码流是干净的，报错来自播放器**实时解码跟不上、自己丢帧**——
+2K H.265 用软件解码很容易触发，换硬件解码即可。同样可以用 `--dump` 存一份裸码流离线验证。
 
 ### 二次验证
 

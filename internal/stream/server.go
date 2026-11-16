@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	// queueDepth is roughly a second of video; beyond this a viewer is too far
-	// behind to catch up and frames are dropped.
-	queueDepth = 60
+	// queueDepth is roughly a second of video, and it is also the latency ceiling
+	// for a viewer that cannot keep up: beyond it the oldest frames are dropped.
+	queueDepth = 25
 	// viewerTimeout drops a viewer when the camera has gone quiet.
 	viewerTimeout = 10 * time.Second
 )
@@ -27,6 +27,9 @@ const (
 type Config struct {
 	Addr string // host:port, e.g. 127.0.0.1:8554
 	Path string // e.g. /cam.ts
+	// PTSLeadMS is how far presentation runs ahead of the transport clock. It is
+	// the largest tunable source of latency in the pipeline.
+	PTSLeadMS int
 }
 
 // Server fans one stream out to any number of HTTP viewers.
@@ -100,6 +103,18 @@ func (s *Server) Viewers() int {
 	return len(s.viewers)
 }
 
+// Resyncs reports how many times a viewer fell behind and had to be restarted at
+// a keyframe. A number that keeps climbing means the player cannot keep up.
+func (s *Server) Resyncs() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	total := 0
+	for v := range s.viewers {
+		total += v.resyncs
+	}
+	return total
+}
+
 // Publish offers a frame to every viewer. It never blocks.
 func (s *Server) Publish(p miss.Packet) {
 	s.mu.RLock()
@@ -150,7 +165,11 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	v := &viewer{frames: make(chan miss.Packet, queueDepth)}
+	v := &viewer{
+		frames:    make(chan miss.Packet, queueDepth),
+		ptsLeadMS: s.cfg.PTSLeadMS,
+		log:       s.log,
+	}
 	s.add(v)
 	s.log.Info("viewer connected", "from", r.RemoteAddr, "total", s.Viewers())
 	defer func() {
@@ -182,8 +201,11 @@ func (s *Server) remove(v *viewer) {
 
 // viewer is one connected player.
 type viewer struct {
-	frames  chan miss.Packet
-	started bool
+	frames    chan miss.Packet
+	started   bool
+	ptsLeadMS int
+	resyncs   int
+	log       *slog.Logger
 }
 
 // offer queues a frame, starting only at a keyframe: a viewer that joins
@@ -196,10 +218,43 @@ func (v *viewer) offer(p miss.Packet) {
 		}
 		v.started = true
 	}
+
 	select {
 	case v.frames <- p:
+		return
 	default:
-		// Too far behind: drop this frame.
+	}
+
+	// The viewer is behind. Dropping an arbitrary frame is not an option: H.265
+	// P-frames reference earlier ones, so a hole makes every following frame
+	// undecodable ("Could not find ref with POC ...") until the next keyframe.
+	//
+	// Throw the backlog away and resynchronise at the next keyframe instead. The
+	// viewer loses a fraction of a second of history and keeps a clean picture;
+	// latency stays bounded at roughly one GOP rather than growing with a queue.
+	v.discardBacklog()
+	v.started = false
+	v.resyncs++
+	if v.log != nil {
+		v.log.Debug("viewer behind, resynchronising at the next keyframe", "resyncs", v.resyncs)
+	}
+
+	if p.Keyframe() {
+		v.started = true
+		select {
+		case v.frames <- p:
+		default:
+		}
+	}
+}
+
+func (v *viewer) discardBacklog() {
+	for {
+		select {
+		case <-v.frames:
+		default:
+			return
+		}
 	}
 }
 
@@ -216,7 +271,7 @@ func (v *viewer) pump(w io.Writer, flusher http.Flusher) {
 				return
 			}
 			if muxer == nil {
-				muxer = ts.NewMuxer(w, p.Codec)
+				muxer = ts.NewMuxerWithLead(w, p.Codec, v.ptsLeadMS)
 			}
 			if err := muxer.Write(p); err != nil {
 				return // normal: the player disconnected

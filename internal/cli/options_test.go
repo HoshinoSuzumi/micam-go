@@ -120,6 +120,47 @@ func TestParseLAN(t *testing.T) {
 	}
 }
 
+func TestParseQualityRange(t *testing.T) {
+	clearEnv(t)
+
+	// The protocol carries 0-5. Newer cameras put full resolution at 3, so the
+	// old 0-3 ceiling silently capped them at HD.
+	for _, q := range []string{"0", "2", "3", "5"} {
+		if _, err := Parse([]string{"--quality", q}); err != nil {
+			t.Fatalf("--quality %s should be accepted: %v", q, err)
+		}
+	}
+	for _, q := range []string{"-1", "6"} {
+		if _, err := Parse([]string{"--quality", q}); err == nil {
+			t.Fatalf("--quality %s should be rejected", q)
+		}
+	}
+}
+
+func TestParsePTSLead(t *testing.T) {
+	clearEnv(t)
+
+	opts, err := Parse(nil)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if opts.PTSLeadMS != 100 {
+		t.Fatalf("default pts lead = %d, want 100", opts.PTSLeadMS)
+	}
+
+	opts, err = Parse([]string{"--pts-lead", "0"})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if opts.PTSLeadMS != 0 {
+		t.Fatalf("pts lead = %d, want 0", opts.PTSLeadMS)
+	}
+
+	if _, err := Parse([]string{"--pts-lead", "5000"}); err == nil {
+		t.Fatal("an out-of-range pts lead must be rejected")
+	}
+}
+
 func TestParseRejectsNegativeReconnect(t *testing.T) {
 	clearEnv(t)
 

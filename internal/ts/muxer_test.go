@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"testing"
 
 	"micam/internal/miss"
@@ -149,6 +150,51 @@ func decodePCR(b []byte) int64 {
 	return int64(b[0])<<25 | int64(b[1])<<17 | int64(b[2])<<9 | int64(b[3])<<1 | int64(b[4]&0x80>>7)
 }
 
+func TestPTSLeadIsConfigurable(t *testing.T) {
+	cases := []struct {
+		lead int
+		want int64
+	}{
+		{0, 0},
+		{100, 9_000},
+		{300, 27_000},
+	}
+
+	for _, tc := range cases {
+		var buf bytes.Buffer
+		muxer := NewMuxerWithLead(&buf, miss.CodecH265, tc.lead)
+		if err := muxer.Write(frame(0, true, 400, 1000)); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		ts := buf.Bytes()
+		off := firstPacketOf(t, ts, 0x0100)
+
+		if got := readPTS(ts, off); got != tc.want {
+			t.Fatalf("lead %dms produced PTS %d, want %d", tc.lead, got, tc.want)
+		}
+		if got := readPCR(ts, off); got != 0 {
+			t.Fatalf("lead %dms moved the PCR to %d; it must stay at 0", tc.lead, got)
+		}
+	}
+}
+
+func TestPTSLeadIsClamped(t *testing.T) {
+	low := NewMuxer(io.Discard, miss.CodecH265)
+	if low.ptsOffset != int64(DefaultPTSLeadMS)*clockHz/1000 {
+		t.Fatalf("default lead = %d ticks", low.ptsOffset)
+	}
+
+	negative := NewMuxerWithLead(io.Discard, miss.CodecH265, -50)
+	if negative.ptsOffset != 0 {
+		t.Fatalf("a negative lead must clamp to 0, got %d", negative.ptsOffset)
+	}
+
+	huge := NewMuxerWithLead(io.Discard, miss.CodecH265, 999_999)
+	if huge.ptsOffset != int64(maxPTSLeadMS)*clockHz/1000 {
+		t.Fatalf("a huge lead must clamp to %d ms, got %d ticks", maxPTSLeadMS, huge.ptsOffset)
+	}
+}
+
 func TestEmitsWellFormedPackets(t *testing.T) {
 	ts := muxPacket(t, miss.CodecH265,
 		frame(0, true, 5000, 1000),
@@ -223,7 +269,8 @@ func TestKeyframeIsMarked(t *testing.T) {
 }
 
 func TestTimestampsAreRebased(t *testing.T) {
-	c := testvec.MustTS(t)
+	lead := int64(DefaultPTSLeadMS) * clockHz / 1000
+
 	huge := int64(167_947_400) // large enough to overflow a 33-bit PTS
 	ts := muxPacket(t, miss.CodecH265,
 		frame(0, true, 500, huge),
@@ -233,15 +280,15 @@ func TestTimestampsAreRebased(t *testing.T) {
 	if pts >= 1<<33 {
 		t.Fatalf("PTS %d does not fit in 33 bits", pts)
 	}
-	if pts != c.PTSOff {
-		t.Fatalf("first PTS = %d, want %d", pts, c.PTSOff)
+	if pts != lead {
+		t.Fatalf("first PTS = %d, want %d", pts, lead)
 	}
 
 	if got := readPCR(ts, firstPacketOf(t, ts, 0x0100)); got != 0 {
 		t.Fatalf("PCR = %d, want 0", got)
 	}
-	if delta := pts - readPCR(ts, firstPacketOf(t, ts, 0x0100)); delta != c.PTSOff {
-		t.Fatalf("PTS leads PCR by %d ticks, want %d", delta, c.PTSOff)
+	if delta := pts - readPCR(ts, firstPacketOf(t, ts, 0x0100)); delta != lead {
+		t.Fatalf("PTS leads PCR by %d ticks, want %d", delta, lead)
 	}
 }
 
@@ -268,8 +315,9 @@ func TestClockSurvivesRepeatsAndBackwards(t *testing.T) {
 	}
 
 	// The repaired elapsed values are the fixture's, offset by the PTS lead.
+	lead := int64(DefaultPTSLeadMS) * clockHz / 1000
 	for i, elapsed := range c.Monotonic.Elapsed {
-		want := c.PTSOff + elapsed*c.ClockHz/1000
+		want := lead + elapsed*c.ClockHz/1000
 		if pts[i] != want {
 			t.Fatalf("frame %d PTS = %d, want %d (elapsed %dms)", i, pts[i], want, elapsed)
 		}

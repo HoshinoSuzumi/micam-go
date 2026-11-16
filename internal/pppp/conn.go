@@ -34,6 +34,7 @@ type Conn struct {
 
 	writeMu    sync.Mutex
 	commandSeq uint16
+	dropped    uint64
 
 	closed    chan struct{}
 	closeOnce sync.Once
@@ -116,6 +117,20 @@ func (c *Conn) SendCommand(cmd uint32, body []byte) error {
 // NextCommand returns the next channel-0 message.
 func (c *Conn) NextCommand(ctx context.Context) ([]byte, bool) {
 	return c.take(ctx, c.commands)
+}
+
+// TryNextCommand returns a queued command without blocking.
+//
+// The camera keeps talking on channel 0 while it streams - roughly one message a
+// second - and nothing in the media loop needs those. Draining them keeps the
+// bounded queue from overflowing, and lets the caller see what they are.
+func (c *Conn) TryNextCommand() ([]byte, bool) {
+	select {
+	case message := <-c.commands:
+		return message, true
+	default:
+		return nil, false
+	}
 }
 
 // NextMedia returns the next channel-2 message.
@@ -247,8 +262,13 @@ func (c *Conn) onData(payload []byte) {
 		select {
 		case queue <- message:
 		default:
-			// The reader must never block on a slow consumer.
-			c.log.Debug("queue full, dropping a message", "channel", channel)
+			// The reader must never block on a slow consumer. Log sparsely: a
+			// full queue repeats every second, and a wall of identical debug
+			// lines hides everything else.
+			c.dropped++
+			if c.dropped == 1 || c.dropped%500 == 0 {
+				c.log.Debug("queue full, dropping a message", "channel", channel, "total", c.dropped)
+			}
 		}
 	}
 }

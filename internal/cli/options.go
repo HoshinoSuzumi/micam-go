@@ -26,6 +26,7 @@ type Options struct {
 	DataDir   string
 	Port      int
 	Quality   int
+	PTSLeadMS int
 
 	ConnectTimeout time.Duration
 	Relogin        bool
@@ -34,6 +35,8 @@ type Options struct {
 	ListCameras    bool
 	Reconnect      int
 	LAN            string
+	Dump           string
+	DumpSeconds    int
 }
 
 // Values for --lan.
@@ -76,7 +79,9 @@ func Parse(args []string) (*Options, error) {
 		"directory holding credentials.json (default: $HOME/.micam)")
 	fs.IntVar(&opts.Port, "port", envIntOr("MICAM_PORT", 8554), "local HTTP port")
 	fs.IntVar(&opts.Quality, "quality", envIntOr("MICAM_QUALITY", 2),
-		"0 auto, 1 sd, 2 hd, 3 full")
+		"0 auto, 1 sd, 2 hd, 3 full; newer cameras may accept 4-5")
+	fs.IntVar(&opts.PTSLeadMS, "pts-lead", envIntOr("MICAM_PTS_LEAD", 100),
+		"presentation lead in ms: lower is snappier, higher is kinder to software decoders")
 	fs.IntVar(&timeoutSeconds, "connect-timeout", 90,
 		"seconds to keep retrying the relay handshake")
 	fs.BoolVar(&opts.Relogin, "relogin", false, "discard the cached session and log in again")
@@ -88,6 +93,10 @@ func Parse(args []string) (*Options, error) {
 		"retry the stream this many times when it ends (0 disables)")
 	fs.StringVar(&opts.LAN, "lan", envOr("MICAM_LAN", LANPrefer),
 		"prefer|only|off: try a direct local-network session before the relay")
+	fs.StringVar(&opts.Dump, "dump", "",
+		"write the raw elementary stream to this file instead of serving it")
+	fs.IntVar(&opts.DumpSeconds, "dump-seconds", 5,
+		"how many seconds to capture when using --dump")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -106,8 +115,16 @@ func Parse(args []string) (*Options, error) {
 		opts.PassToken = strings.TrimSpace(string(raw))
 	}
 
-	if opts.Quality < 0 || opts.Quality > 3 {
-		return nil, fmt.Errorf("quality must be 0..3, got %d", opts.Quality)
+	// The protocol carries 0-5; cameras ignore values they do not know, so a
+	// wider range costs nothing and lets newer models be asked at full quality.
+	if opts.Quality < 0 || opts.Quality > 5 {
+		return nil, fmt.Errorf("quality must be 0..5, got %d", opts.Quality)
+	}
+	if opts.PTSLeadMS < 0 || opts.PTSLeadMS > 2000 {
+		return nil, fmt.Errorf("pts-lead must be 0..2000 ms, got %d", opts.PTSLeadMS)
+	}
+	if opts.DumpSeconds < 0 {
+		return nil, fmt.Errorf("dump-seconds must be >= 0, got %d", opts.DumpSeconds)
 	}
 	if opts.Port < 1 || opts.Port > 65535 {
 		return nil, fmt.Errorf("port must be 1..65535, got %d", opts.Port)

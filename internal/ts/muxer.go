@@ -32,11 +32,16 @@ const (
 	// clockHz is the MPEG-TS timestamp clock.
 	clockHz = 90_000
 
-	// ptsOffset is how far presentation runs ahead of the transport clock, about
-	// 300ms. PCR is when a packet is transmitted, PTS when its frame is shown; if
-	// the two are equal every frame is due the instant it arrives and strict
-	// players (mpv, VLC) drop all of them.
-	ptsOffset = 27_000
+	// DefaultPTSLeadMS is how far presentation runs ahead of the transport clock.
+	// PCR is when a packet is transmitted, PTS when its frame is shown; equal
+	// values leave no margin and strict players (mpv, VLC) drop every frame.
+	//
+	// Upstream uses 300ms. This fork defaults to 100: it is a third of the added
+	// latency and still leaves a decoder room to work. Raise it if a software
+	// decoder starts dropping frames.
+	DefaultPTSLeadMS = 100
+	// maxPTSLeadMS bounds the tunable lead.
+	maxPTSLeadMS = 2_000
 
 	// tableIntervalFrames re-announces the tables so a decoder can resynchronise.
 	tableIntervalFrames = 20
@@ -61,18 +66,34 @@ type Muxer struct {
 	previousMS   int64
 	elapsedMS    int64
 
+	ptsOffset int64
+
 	framesSinceTables int
 }
 
-// NewMuxer builds a muxer for the given codec id.
+// NewMuxer builds a muxer for the given codec id with the default PTS lead.
 func NewMuxer(w io.Writer, codec uint32) *Muxer {
+	return NewMuxerWithLead(w, codec, DefaultPTSLeadMS)
+}
+
+// NewMuxerWithLead builds a muxer with an explicit presentation lead, in
+// milliseconds. Zero means presentation and transmission coincide, which is the
+// lowest latency a player can honour and the least forgiving.
+func NewMuxerWithLead(w io.Writer, codec uint32, leadMS int) *Muxer {
 	streamType := byte(streamTypeH265)
 	if codec == miss.CodecH264 {
 		streamType = streamTypeH264
 	}
+	if leadMS < 0 {
+		leadMS = 0
+	}
+	if leadMS > maxPTSLeadMS {
+		leadMS = maxPTSLeadMS
+	}
 	return &Muxer{
 		w:                 w,
 		streamType:        streamType,
+		ptsOffset:         int64(leadMS) * clockHz / 1000,
 		framesSinceTables: 1 << 30, // force the tables out on the first frame
 	}
 }
@@ -91,7 +112,7 @@ func (m *Muxer) Write(p miss.Packet) error {
 	m.framesSinceTables++
 
 	elapsed := m.advanceClock(p.TimestampMS) * clockHz / 1000
-	return m.writeVideo(p.Payload, ptsOffset+elapsed, elapsed, p.Keyframe())
+	return m.writeVideo(p.Payload, m.ptsOffset+elapsed, elapsed, p.Keyframe())
 }
 
 // Flush pushes the underlying writer.
