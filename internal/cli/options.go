@@ -30,6 +30,8 @@ type Options struct {
 	Relogin        bool
 	Verbose        bool
 	ShowVersion    bool
+	ListCameras    bool
+	Reconnect      int
 }
 
 // Parse reads the command line, falling back to environment variables for the
@@ -66,6 +68,10 @@ func Parse(args []string) (*Options, error) {
 	fs.BoolVar(&opts.Relogin, "relogin", false, "discard the cached session and log in again")
 	fs.BoolVar(&opts.Verbose, "verbose", false, "trace every PPPP datagram")
 	fs.BoolVar(&opts.ShowVersion, "version", false, "print the version and exit")
+	fs.BoolVar(&opts.ListCameras, "list-cameras", false,
+		"log in, print the cameras on the account and exit")
+	fs.IntVar(&opts.Reconnect, "reconnect", envIntOr("MICAM_RECONNECT", 0),
+		"retry the stream this many times when it ends (0 disables)")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -89,6 +95,9 @@ func Parse(args []string) (*Options, error) {
 	}
 	if opts.Port < 1 || opts.Port > 65535 {
 		return nil, fmt.Errorf("port must be 1..65535, got %d", opts.Port)
+	}
+	if opts.Reconnect < 0 {
+		return nil, fmt.Errorf("reconnect must be >= 0, got %d", opts.Reconnect)
 	}
 
 	return opts, nil

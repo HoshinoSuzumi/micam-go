@@ -65,13 +65,29 @@ micam --did 1234567890 --region cn --port 8554
 | `--bind` | `127.0.0.1` | HTTP 监听地址；容器里用 `0.0.0.0` |
 | `--port` | `8554` | HTTP 端口 |
 | `--quality` | `2` | 0 auto / 1 SD / 2 HD / 3 full |
+| `--list-cameras` | off | 只登录并列出摄像头（DID / 型号 / 在线状态）后退出，不连中继、不开端口 |
+| `--reconnect` | `0` | 断流后自动重连的次数；`0` 表示不重连，交给编排层重启 |
 | `--connect-timeout` | `90` | 中继握手总超时（秒） |
 | `--pass-token` | — | 浏览器复制的 `passToken`，免密码免 2FA |
 | `--relogin` | off | 丢弃缓存会话重新登录 |
 | `--verbose` | off | 逐包打印 PPPP |
 
-环境变量：`MICAM_USER` `MICAM_REGION` `MICAM_DID` `MICAM_PASS_TOKEN` `MICAM_PASS_TOKEN_FILE`
-`MICAM_BIND` `MICAM_PORT` `MICAM_QUALITY`。
+环境变量：`MICAM_USER` `MICAM_USER_ID` `MICAM_REGION` `MICAM_DID` `MICAM_PASS_TOKEN`
+`MICAM_PASS_TOKEN_FILE` `MICAM_BIND` `MICAM_PORT` `MICAM_QUALITY` `MICAM_RECONNECT`。
+
+### 先拿到 DID
+
+```sh
+micam --list-cameras --region cn --user <账号> --pass-token <token>
+```
+
+```
+  DID          MODEL                          NAME          STATUS
+  312345678    chuangmi.camera.ipc019         客厅          online
+  412345678    chuangmi.camera.029a02         门口          OFFLINE
+```
+
+只做登录与 `device_list`，不建 UDP 会话、不占 HTTP 端口——最省事的查询方式。
 
 退出码与上游一致：`1` 无摄像头/传输不支持，`2` 登录或 2FA，`3` 中继失败，`4` 离线，
 `5` 无媒体，`6` 端口占用。
@@ -97,6 +113,15 @@ docker compose up -d --build
 上游硬编码 `127.0.0.1` 的问题在这里不存在——Go 版直接监听可配置地址，不需要 socat。
 
 ⚠️ 这个流**没有任何鉴权**。只把它发布在可信网段，或前面挂一层带认证的反代。
+
+## 真机验证记录
+
+| 日期 | 环境 | 结果 |
+|---|---|---|
+| 2026-11-17 | 小米摄像头（H.265），PotPlayer / 硬件解码 | 连续播放 2 分钟无异常；PTS 单调，PCR 落后 PTS 300 ms 生效；全程无转码 |
+
+这一条同时验证了三件事：PMT 里 `stream_type` 正确（HEVC = 0x24）、时间戳逻辑可用、
+以及"只复用不转码"的设计在播放器侧成立。
 
 ## 为什么值得有它
 

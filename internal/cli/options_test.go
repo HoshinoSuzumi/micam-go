@@ -1,0 +1,105 @@
+package cli
+
+import (
+	"testing"
+
+	"micam/internal/creds"
+)
+
+// clearEnv hides every MICAM_* variable so a developer's environment cannot
+// change what these tests assert.
+func clearEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"MICAM_USER", "MICAM_USER_ID", "MICAM_REGION", "MICAM_PASSWORD",
+		"MICAM_PASS_TOKEN", "MICAM_PASS_TOKEN_FILE", "MICAM_BIND", "MICAM_PORT",
+		"MICAM_QUALITY", "MICAM_RECONNECT",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
+func TestParseDefaults(t *testing.T) {
+	clearEnv(t)
+
+	opts, err := Parse(nil)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if opts.Bind != "127.0.0.1" {
+		t.Fatalf("bind = %q, want 127.0.0.1", opts.Bind)
+	}
+	if opts.Port != 8554 {
+		t.Fatalf("port = %d, want 8554", opts.Port)
+	}
+	if opts.Quality != 2 {
+		t.Fatalf("quality = %d, want 2", opts.Quality)
+	}
+	if opts.Region != creds.DefaultRegion {
+		t.Fatalf("region = %q, want %q", opts.Region, creds.DefaultRegion)
+	}
+	if opts.Reconnect != 0 {
+		t.Fatalf("reconnect = %d, want 0 (disabled)", opts.Reconnect)
+	}
+	if opts.ListCameras {
+		t.Fatal("--list-cameras must default to false")
+	}
+}
+
+func TestParseNewFlags(t *testing.T) {
+	clearEnv(t)
+
+	opts, err := Parse([]string{"--list-cameras", "--reconnect", "3"})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !opts.ListCameras {
+		t.Fatal("--list-cameras was not picked up")
+	}
+	if opts.Reconnect != 3 {
+		t.Fatalf("reconnect = %d, want 3", opts.Reconnect)
+	}
+
+	opts, err = Parse([]string{"--reconnect", "0"})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if opts.Reconnect != 0 {
+		t.Fatalf("reconnect = %d, want 0", opts.Reconnect)
+	}
+}
+
+func TestParseRejectsNegativeReconnect(t *testing.T) {
+	clearEnv(t)
+
+	if _, err := Parse([]string{"--reconnect", "-1"}); err == nil {
+		t.Fatal("a negative reconnect count must be rejected")
+	}
+}
+
+func TestApplyFoldsUserIDIntoCredentials(t *testing.T) {
+	clearEnv(t)
+
+	opts, err := Parse([]string{
+		"--user", "15023365994",
+		"--user-id", "1234567890",
+		"--pass-token", "  token-with-space\n",
+		"--region", "cn",
+	})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	c := &creds.Credentials{}
+	opts.Apply(c)
+
+	if c.UserID != "1234567890" {
+		t.Fatalf("userId = %q, want the numeric id", c.UserID)
+	}
+	if c.PassToken != "token-with-space" {
+		t.Fatalf("passToken = %q, want it trimmed", c.PassToken)
+	}
+	if c.User != "15023365994" || c.Region != "cn" {
+		t.Fatalf("credentials = %+v", c)
+	}
+}

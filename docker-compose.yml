@@ -21,6 +21,8 @@ services:
       MICAM_BIND: 0.0.0.0
       MICAM_PORT: "8554"
       MICAM_QUALITY: "2"
+      # Reconnect inside the container instead of waiting for a restart.
+      MICAM_RECONNECT: "${MICAM_RECONNECT:-5}"
 
     volumes:
       # Credentials and the cached session live here.

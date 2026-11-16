@@ -8,20 +8,13 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
 	"os/signal"
-	"strconv"
-	"strings"
 	"syscall"
-	"time"
 
 	"micam/internal/cli"
 	"micam/internal/cloud"
 	"micam/internal/creds"
-	"micam/internal/miss"
-	"micam/internal/pppp"
-	"micam/internal/stream"
 )
 
 // Exit codes mirror the upstream tool so scripts keep working.
@@ -141,6 +134,10 @@ func serve(ctx context.Context, opts *cli.Options, log *slog.Logger) int {
 		return exitNoCamera
 	}
 
+	if opts.ListCameras {
+		return printCameras(cameras)
+	}
+
 	target, err := pickCamera(cameras, opts.DID)
 	if err != nil {
 		log.Error("cannot select a camera", "err", err)
@@ -154,113 +151,7 @@ func serve(ctx context.Context, opts *cli.Options, log *slog.Logger) int {
 		return exitOffline
 	}
 
-	keys, err := miss.GenerateKeys()
-	if err != nil {
-		log.Error("cannot generate a key pair", "err", err)
-		return exitSession
-	}
-	prov, err := client.Provision(ctx, target.DID, keys.PublicHex())
-	if err != nil {
-		log.Error("provisioning failed", "err", err)
-		return exitSession
-	}
-	if !prov.IsCS2() {
-		log.Error("unsupported transport", "vendor", prov.VendorName(),
-			"hint", "only cs2 is implemented")
-		return exitNoCamera
-	}
-
-	uid, err := pppp.ParseUID(prov.P2PID)
-	if err != nil {
-		log.Error("cannot parse the camera's P2P id", "err", err, "p2p_id", prov.P2PID)
-		return exitSession
-	}
-
-	sock, err := net.ListenUDP("udp4", nil)
-	if err != nil {
-		log.Error("cannot open a UDP socket", "err", err)
-		return exitSession
-	}
-	defer sock.Close()
-
-	log.Info("connecting via the CS2 relay", "p2p_id", prov.P2PID, "servers", len(prov.Servers))
-	sess, err := pppp.Dial(ctx, sock, uid, prov.Servers, opts.ConnectTimeout, log)
-	if err != nil {
-		log.Error("relay session failed", "err", err,
-			"hint", "if the Mi Home app is holding this camera, close it and retry")
-		return exitSession
-	}
-
-	local := localEndpoint(sock, sess.Relay())
-	conn := pppp.NewConn(sock, sess.Relay(), local, log)
-	conn.Start()
-	defer conn.Close()
-
-	client2 := miss.NewClient(conn)
-	if _, err := client2.Authenticate(ctx, keys.PublicHex(), prov.Sign, 15*time.Second); err != nil {
-		log.Error("MISS authentication failed", "err", err)
-		return exitSession
-	}
-
-	key, err := miss.SessionKey(keys.Private, prov.DevicePublic)
-	if err != nil {
-		log.Error("cannot derive the session key", "err", err)
-		return exitSession
-	}
-	client2.UseSessionKey(key)
-
-	if err := client2.StartVideo(opts.Quality, false); err != nil {
-		log.Error("cannot start the video stream", "err", err)
-		return exitSession
-	}
-	defer func() { _ = client2.StopVideo() }()
-
-	addr := net.JoinHostPort(opts.Bind, strconv.Itoa(opts.Port))
-	server := stream.New(stream.Config{Addr: addr, Path: "/cam.ts"}, log)
-	if err := server.Start(); err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "in use") {
-			log.Error("port already in use", "port", opts.Port, "hint", "pass --port to pick another")
-			return exitPort
-		}
-		log.Error("cannot start the stream server", "err", err)
-		return exitPort
-	}
-	defer server.Close()
-
-	fmt.Println()
-	fmt.Printf("  Streaming at:  %s\n", server.URL())
-	fmt.Println()
-	fmt.Printf("    mpv    %s\n", server.URL())
-	fmt.Printf("    vlc    %s\n", server.URL())
-	fmt.Printf("    ffplay %s\n", server.URL())
-	fmt.Println()
-
-	frames := 0
-	for ctx.Err() == nil {
-		p, ok, err := client2.NextMedia(ctx)
-		if err != nil {
-			log.Error("media error", "err", err)
-			break
-		}
-		if !ok {
-			break
-		}
-		if !p.IsVideo() {
-			continue
-		}
-		server.Publish(p)
-		frames++
-		if frames%600 == 0 {
-			log.Info("relaying", "frames", frames, "viewers", server.Viewers(), "codec", p.CodecName())
-		}
-	}
-
-	if frames == 0 {
-		log.Error("the session was established but no media arrived")
-		return exitNoMedia
-	}
-	log.Info("stopped", "frames", frames)
-	return exitOK
+	return runCamera(ctx, opts, client, target, log)
 }
 
 func authenticate(ctx context.Context, client *cloud.Client, opts *cli.Options,
@@ -331,31 +222,6 @@ func pickCamera(cameras []cloud.Device, did string) (cloud.Device, error) {
 		return cloud.Device{}, err
 	}
 	return cameras[index], nil
-}
-
-// localEndpoint reports the address we present to the relay in the 0x28 reply:
-// the egress interface, with the session socket's port.
-func localEndpoint(sock *net.UDPConn, relay *net.UDPAddr) pppp.Addr {
-	la, ok := sock.LocalAddr().(*net.UDPAddr)
-	if !ok {
-		return pppp.Addr{}
-	}
-	fallback := pppp.AddrFromUDP(la)
-
-	probe, err := net.DialUDP("udp4", nil, relay)
-	if err != nil {
-		return fallback
-	}
-	defer probe.Close()
-
-	egress, ok := probe.LocalAddr().(*net.UDPAddr)
-	if !ok {
-		return fallback
-	}
-	if addr, err := pppp.NewAddr(egress.IP.String(), uint16(la.Port)); err == nil {
-		return addr
-	}
-	return fallback
 }
 
 func newLogger(verbose bool) *slog.Logger {
