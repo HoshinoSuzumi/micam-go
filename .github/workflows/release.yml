@@ -16,7 +16,7 @@ on:
       fpk:
         description: "发布完成后自动打包 fnOS FPK"
         required: false
-        default: false
+        default: true
         type: boolean
       draft:
         description: "把 GitHub Release 建成草稿"

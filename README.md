@@ -238,7 +238,7 @@ make fpk     # 需要 fnpack：https://developer.fnnas.com/docs/cli/fnpack
 | 输入 | 默认 | 作用 |
 |---|---|---|
 | `latest` | 开 | 是否同时把 `latest` 指向这个版本 |
-| `fpk` | 关 | 发布完成后自动打包 fnOS 应用包 |
+| `fpk` | 开 | 发布完成后自动打包 fnOS 应用包 |
 | `draft` | 开 | GitHub Release 建成草稿，检查过产物再手动发布 |
 
 **产物都挂在 GitHub Release 上**：`micam-linux-arm64`、`micam-linux-amd64`，勾了 `fpk`
