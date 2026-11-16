@@ -11,6 +11,14 @@ services:
     ports:
       - "8554:8554"
 
+    # --- 想要局域网直连的话 -------------------------------------------------
+    # Docker 默认的 bridge 网络不会把 255.255.255.255 广播送到物理网段，
+    # 摄像头收不到 LAN_SEARCH，就会静默退回中继。要用直连就把下面的 ports
+    # 整段注释掉，并取消 network_mode 的注释（host 模式不能同时发布端口）。
+    #
+    # network_mode: host
+    # ----------------------------------------------------------------------
+
     environment:
       MICAM_USER: "${MICAM_USER}"
       MICAM_REGION: "${MICAM_REGION:-cn}"
