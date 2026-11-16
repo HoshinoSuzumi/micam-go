@@ -1,5 +1,13 @@
 .git
 .tmp
+bin
+
+# runtime state and secrets - must never reach a layer
 data
 secrets
+.env
+
+# captures and logs
 *.log
+*.h265
+*.ts

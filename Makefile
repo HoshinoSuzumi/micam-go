@@ -1,7 +1,12 @@
 GO ?= go
 BIN ?= micam
 
-.PHONY: fmt vet test build cross docker clean
+# Registry coordinates for the image targets. Override on the command line:
+#   make docker-push IMAGE=youruser/micam TAG=0.4.0
+IMAGE ?= micam
+TAG ?= dev
+
+.PHONY: fmt vet test build cross docker docker-push docker-push-multi clean
 
 fmt:
 	gofmt -w .
@@ -21,8 +26,21 @@ cross:
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags="-s -w" \
 		-o bin/$(BIN)-linux-arm64 ./cmd/micam
 
+# Build for the machine running the command.
 docker:
-	docker buildx build --platform linux/arm64 -t micam:arm64 .
+	docker buildx build --platform linux/arm64 -t $(IMAGE):$(TAG) .
+
+# Build and push one architecture. Run this on arm64 hardware: the Go toolchain
+# then runs natively instead of under emulation.
+docker-push:
+	docker buildx build --platform linux/arm64 \
+		-t $(IMAGE):$(TAG) -t $(IMAGE):latest --push .
+
+# Both architectures in one manifest. The foreign platform is compiled under
+# QEMU, which is noticeably slower.
+docker-push-multi:
+	docker buildx build --platform linux/amd64,linux/arm64 \
+		-t $(IMAGE):$(TAG) -t $(IMAGE):latest --push .
 
 clean:
 	rm -rf bin

@@ -12,7 +12,7 @@ import (
 )
 
 // Version is what --version prints.
-const Version = "micam-go 0.2.0"
+const Version = "micam-go 0.4.0"
 
 // Options is the parsed command line.
 type Options struct {
