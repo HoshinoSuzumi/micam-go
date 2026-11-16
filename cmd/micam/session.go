@@ -204,7 +204,7 @@ func dialCamera(ctx context.Context, opts *cli.Options, target cloud.Device, uid
 		if err != nil {
 			log.Debug("the camera reports no usable local address", "localip", target.LocalIP)
 		} else {
-			sock, peer, lanErr := pppp.LANHandshake(ip, pppp.LANPort, lanHandshakeTimeout, log)
+			sock, peer, lanErr := pppp.LANHandshake(uid, ip, lanHandshakeTimeout, log)
 			if lanErr == nil {
 				log.Info("direct local session", "camera", ip.String(), "peer", peer.String())
 				return sock, peer, nil

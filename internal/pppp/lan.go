@@ -1,6 +1,8 @@
 package pppp
 
 import (
+	"bytes"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,26 +19,28 @@ const (
 	lanDefaultTimeout = 3 * time.Second
 )
 
+// Variables so tests can keep packets on loopback.
+var (
+	lanPort      = LANPort
+	lanBroadcast = true
+)
+
 // LANHandshake opens a direct session with a camera on the local network.
 //
-// The exchange is four steps and needs no cloud involvement beyond the keys the
-// caller already fetched:
+// Cameras answer a broadcast search, not a unicast one: measured on a
+// xiaomi.camera.92ac1, a packet sent straight to its address is ignored while
+// the same packet to the broadcast address is answered within a millisecond.
 //
-//	-> camera:32108  F1 30 0000        LAN_SEARCH
-//	<-                F1 41 ...        PUNCH_PKT
-//	->                the same packet  (echoed verbatim)
-//	<-                F1 42 ...        P2P_RDY, now from the session port
+//	-> 255.255.255.255:32108  F1 30 0000        LAN_SEARCH
+//	<-                        F1 41 ...        PUNCH_PKT, payload = the camera UID
+//	->                        the same packet  (echoed verbatim, to its source port)
+//	<-                        F1 42 ...        P2P_RDY, from the session port
 //
-// From there the socket carries ordinary DRW/MISS traffic, exactly like the
-// relay path: no relay, and none of the 0x28 linking that only relays need.
-//
-// The returned address is the peer to hand to NewConn.
-func LANHandshake(camera netip.Addr, port int, timeout time.Duration, log *slog.Logger) (*net.UDPConn, *net.UDPAddr, error) {
-	if !camera.Is4() {
+// The UID in the punch packet is what identifies the camera: several cameras on
+// one network all answer, and we must not attach to the wrong one.
+func LANHandshake(uid UID, hint netip.Addr, timeout time.Duration, log *slog.Logger) (*net.UDPConn, *net.UDPAddr, error) {
+	if hint.IsValid() && !hint.Is4() {
 		return nil, nil, errors.New("pppp: the LAN handshake needs an IPv4 camera address")
-	}
-	if port == 0 {
-		port = LANPort
 	}
 	if timeout <= 0 {
 		timeout = lanDefaultTimeout
@@ -49,43 +53,69 @@ func LANHandshake(camera netip.Addr, port int, timeout time.Duration, log *slog.
 	if err != nil {
 		return nil, nil, fmt.Errorf("pppp: cannot open a UDP socket: %w", err)
 	}
+	if err := enableBroadcast(conn); err != nil {
+		log.Debug("cannot enable broadcast, the search may be limited to unicast", "err", err)
+	}
 
-	target := &net.UDPAddr{IP: net.IP(camera.AsSlice()), Port: port}
-
-	punch, err := searchCamera(conn, target, timeout, log)
+	want := uid.Encode()
+	punch, from, err := searchCamera(conn, hint, want, timeout, log)
 	if err != nil {
 		conn.Close()
 		return nil, nil, err
 	}
 
-	peer, err := openSession(conn, target, punch, timeout, log)
+	peer, err := openSession(conn, from, punch, timeout, log)
 	if err != nil {
 		conn.Close()
 		return nil, nil, err
 	}
 
-	// The handshake left a read deadline behind; the session loop sets its own.
 	_ = conn.SetReadDeadline(time.Time{})
 	return conn, peer, nil
 }
 
-// searchCamera broadcasts LAN_SEARCH until the camera answers with PUNCH_PKT,
-// and returns that packet so it can be echoed back.
-func searchCamera(conn *net.UDPConn, target *net.UDPAddr, timeout time.Duration, log *slog.Logger) ([]byte, error) {
+// searchTargets is every address worth asking: the limited broadcast, the
+// directed broadcast of the camera's /24, and the camera itself.
+func searchTargets(hint netip.Addr) []*net.UDPAddr {
+	var out []*net.UDPAddr
+
+	if lanBroadcast {
+		out = append(out, &net.UDPAddr{IP: net.IPv4bcast, Port: lanPort})
+		if hint.Is4() {
+			o := hint.As4()
+			out = append(out, &net.UDPAddr{
+				IP:   net.IPv4(o[0], o[1], o[2], 255),
+				Port: lanPort,
+			})
+		}
+	}
+	if hint.Is4() {
+		out = append(out, &net.UDPAddr{IP: net.IP(hint.AsSlice()), Port: lanPort})
+	}
+	return out
+}
+
+// searchCamera broadcasts LAN_SEARCH until a punch packet carrying our UID
+// arrives, and returns that packet so it can be echoed back.
+func searchCamera(conn *net.UDPConn, hint netip.Addr, uid [UIDLen]byte, timeout time.Duration, log *slog.Logger) ([]byte, *net.UDPAddr, error) {
 	search := EncodeFrame(MsgLANSrch, nil)
+	targets := searchTargets(hint)
 	buf := make([]byte, rxBufferSize)
 	deadline := time.Now().Add(timeout)
 	nextSend := time.Now()
 
+	answers := 0
 	for time.Now().Before(deadline) {
-		if err := pump(conn, target, search, &nextSend, deadline); err != nil {
-			return nil, err
+		if !time.Now().Before(nextSend) {
+			for _, target := range targets {
+				if _, err := conn.WriteToUDP(search, target); err != nil {
+					log.Debug("LAN search send failed", "to", target.String(), "err", err)
+				}
+			}
+			nextSend = time.Now().Add(lanSearchInterval)
 		}
 
-		frame, from, ok, err := readFrom(conn, target, buf, lanSearchInterval)
-		if err != nil {
-			return nil, err
-		}
+		frame, from, ok := readReply(conn, nextSend, buf)
 		if !ok {
 			continue
 		}
@@ -93,30 +123,42 @@ func searchCamera(conn *net.UDPConn, target *net.UDPAddr, timeout time.Duration,
 			continue
 		}
 
+		answers++
+		if !bytes.Equal(frame.Payload, uid[:]) {
+			// Another camera on the same network, or a different device.
+			log.Debug("LAN answer from a different device",
+				"from", from.String(), "id", hex.EncodeToString(frame.Payload))
+			continue
+		}
+
 		log.Debug("camera answered the LAN search", "from", from.String())
 		echo := make([]byte, len(frame.raw))
 		copy(echo, frame.raw)
-		return echo, nil
+		return echo, from, nil
 	}
-	return nil, fmt.Errorf("pppp: no camera answered on %s", target.String())
+
+	if answers > 0 {
+		return nil, nil, fmt.Errorf("pppp: %d device(s) answered but none matched %s", answers, uid)
+	}
+	return nil, nil, errors.New("pppp: no camera answered the LAN search")
 }
 
 // openSession echoes the punch packet until the camera reports P2P_RDY from the
-// port the session will use.
-func openSession(conn *net.UDPConn, target *net.UDPAddr, punch []byte, timeout time.Duration, log *slog.Logger) (*net.UDPAddr, error) {
+// port that will carry the session.
+func openSession(conn *net.UDPConn, camera *net.UDPAddr, punch []byte, timeout time.Duration, log *slog.Logger) (*net.UDPAddr, error) {
 	buf := make([]byte, rxBufferSize)
 	deadline := time.Now().Add(timeout)
 	nextSend := time.Now()
 
 	for time.Now().Before(deadline) {
-		if err := pump(conn, target, punch, &nextSend, deadline); err != nil {
-			return nil, err
+		if !time.Now().Before(nextSend) {
+			if _, err := conn.WriteToUDP(punch, camera); err != nil {
+				return nil, fmt.Errorf("pppp: LAN send failed: %w", err)
+			}
+			nextSend = time.Now().Add(lanSearchInterval)
 		}
 
-		frame, from, ok, err := readFrom(conn, target, buf, lanSearchInterval)
-		if err != nil {
-			return nil, err
-		}
+		frame, from, ok := readReply(conn, nextSend, buf)
 		if !ok {
 			continue
 		}
@@ -133,51 +175,33 @@ func openSession(conn *net.UDPConn, target *net.UDPAddr, punch []byte, timeout t
 	return nil, errors.New("pppp: the camera did not open a direct session")
 }
 
-func pump(conn *net.UDPConn, target *net.UDPAddr, packet []byte, nextSend *time.Time, deadline time.Time) error {
-	if time.Now().Before(*nextSend) {
-		return nil
-	}
-	if _, err := conn.WriteToUDP(packet, target); err != nil {
-		return fmt.Errorf("pppp: LAN send failed: %w", err)
-	}
-	*nextSend = time.Now().Add(lanSearchInterval)
-	if nextSend.After(deadline) {
-		*nextSend = deadline
-	}
-	return nil
-}
-
-// lanFrame is a parsed frame that still remembers its raw bytes, because the
-// punch packet has to be echoed verbatim.
+// lanFrame keeps the raw datagram because the punch packet must be echoed
+// verbatim.
 type lanFrame struct {
 	Frame
 	raw []byte
 }
 
-func readFrom(conn *net.UDPConn, target *net.UDPAddr, buf []byte, window time.Duration) (lanFrame, *net.UDPAddr, bool, error) {
-	if err := conn.SetReadDeadline(time.Now().Add(window)); err != nil {
-		return lanFrame{}, nil, false, nil
+func readReply(conn *net.UDPConn, until time.Time, buf []byte) (lanFrame, *net.UDPAddr, bool) {
+	deadline := until
+	if deadline.After(time.Now().Add(lanSearchInterval)) {
+		deadline = time.Now().Add(lanSearchInterval)
 	}
-	n, from, err := conn.ReadFromUDP(buf)
-	if err != nil {
-		var netErr net.Error
-		if errors.As(err, &netErr) && netErr.Timeout() {
-			return lanFrame{}, nil, false, nil
-		}
-		return lanFrame{}, nil, false, fmt.Errorf("pppp: LAN receive failed: %w", err)
+	if err := conn.SetReadDeadline(deadline); err != nil {
+		return lanFrame{}, nil, false
 	}
 
-	// Only the camera we asked may answer.
-	if !from.IP.Equal(target.IP) {
-		return lanFrame{}, nil, false, nil
+	n, from, err := conn.ReadFromUDP(buf)
+	if err != nil {
+		return lanFrame{}, nil, false
 	}
 
 	frame, ok := ParseFrame(buf[:n])
 	if !ok {
-		return lanFrame{}, nil, false, nil
+		return lanFrame{}, nil, false
 	}
 
 	raw := make([]byte, n)
 	copy(raw, buf[:n])
-	return lanFrame{Frame: frame, raw: raw}, from, true, nil
+	return lanFrame{Frame: frame, raw: raw}, from, true
 }
