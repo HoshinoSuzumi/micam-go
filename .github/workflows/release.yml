@@ -57,19 +57,29 @@ jobs:
           fi
 
           tag="v${version}"
-          if git rev-parse "refs/tags/${tag}" >/dev/null 2>&1; then
-            echo "::error::tag ${tag} 已经存在，换一个版本号"
-            exit 1
-          fi
+          head=$(git rev-parse HEAD)
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$tag" -m "micam $version"
-          git push origin "$tag"
+          if git rev-parse "refs/tags/${tag}" >/dev/null 2>&1; then
+            tagged=$(git rev-list -n 1 "$tag")
+
+            if [ "$tagged" = "$head" ]; then
+              # 同一次提交上重跑（比如修完工作流再发一次）是安全的：tag 不会移动。
+              echo "tag $tag 已指向当前提交 $head，直接复用"
+            else
+              echo "::error::tag $tag 已存在于 $tagged，当前提交是 $head"
+              echo "::error::确认要重发就先删掉它：git push origin :refs/tags/$tag"
+              exit 1
+            fi
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$tag" -m "micam $version"
+            git push origin "$tag"
+            echo "已创建并推送 tag $tag"
+          fi
 
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "已创建并推送 tag $tag"
 
   test:
     needs: prepare
