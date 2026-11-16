@@ -1,0 +1,14 @@
+appname="micam"
+version="0.4.0"
+display_name="micam 摄像头取流"
+desc="把小米摄像头转成 MPEG-TS over HTTP：登录小米云取会话参数，优先局域网直连，失败回落 CS2 中继，不转码。"
+source="thirdparty"
+platform="all"
+maintainer="HoshinoSuzumi"
+maintainer_url="https://github.com/HoshinoSuzumi/micam-go"
+os_min_version="1.2.0"
+ctl_stop=true
+service_port=8554
+checkport=false
+desktop_uidir="ui"
+desktop_applaunchname="micam.Application"

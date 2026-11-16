@@ -1,0 +1,33 @@
+#!/bin/sh
+# start / stop / status，由飞牛 fnOS 应用中心调用。
+#
+# 容器由 docker-project 资源声明，理论上框架也会管它的生命周期；这里的调用是
+# 幂等的（compose up 不会重复创建，down 重复执行也无害），两条路径都成立。
+set -eu
+
+COMPOSE_FILE="${TRIM_APPDEST:-/var/apps/micam/target}/docker/docker-compose.yaml"
+PROJECT="micam"
+
+compose() {
+    docker compose -f "$COMPOSE_FILE" -p "$PROJECT" "$@"
+}
+
+case "${1:-}" in
+start)
+    compose up -d
+    ;;
+stop)
+    compose down
+    ;;
+status)
+    running=$(compose ps -q 2>/dev/null || true)
+    if [ -n "$running" ]; then
+        exit 0
+    fi
+    exit 3
+    ;;
+*)
+    echo "unknown command: ${1:-}" >> "${TRIM_TEMP_LOGFILE:-/dev/null}"
+    exit 1
+    ;;
+esac

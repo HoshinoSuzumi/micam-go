@@ -1,0 +1,96 @@
+[
+  {
+    "stepTitle": "小米账号",
+    "items": [
+      {
+        "type": "text",
+        "field": "wizard_user",
+        "label": "账号（uid / 手机 / 邮箱）",
+        "initValue": "",
+        "rules": [
+          { "required": true, "message": "请填写小米账号" }
+        ]
+      },
+      {
+        "type": "text",
+        "field": "wizard_user_id",
+        "label": "数字 userId（用 passToken 登录时必填）",
+        "initValue": "",
+        "helpText": "浏览器登录 account.xiaomi.com 后，在 DevTools → Application → Cookies 里取 userId"
+      },
+      {
+        "type": "select",
+        "field": "wizard_region",
+        "label": "账号区域",
+        "initValue": "cn",
+        "options": [
+          { "label": "中国大陆 (cn)", "value": "cn" },
+          { "label": "德国 (de)", "value": "de" },
+          { "label": "新加坡 (sg)", "value": "sg" },
+          { "label": "美国 (us)", "value": "us" },
+          { "label": "俄罗斯 (ru)", "value": "ru" },
+          { "label": "印度 (i2)", "value": "i2" }
+        ]
+      },
+      {
+        "type": "password",
+        "field": "wizard_pass_token",
+        "label": "passToken",
+        "initValue": "",
+        "rules": [
+          { "required": true, "message": "请粘贴 passToken" }
+        ]
+      }
+    ]
+  },
+  {
+    "stepTitle": "摄像头与码流",
+    "items": [
+      {
+        "type": "text",
+        "field": "wizard_did",
+        "label": "摄像头 DID",
+        "initValue": "",
+        "rules": [
+          { "required": true, "message": "请填写 DID" },
+          { "pattern": "^[0-9]+$", "message": "DID 是纯数字" }
+        ]
+      },
+      {
+        "type": "select",
+        "field": "wizard_quality",
+        "label": "清晰度",
+        "initValue": "3",
+        "options": [
+          { "label": "3 全分辨率（推荐）", "value": "3" },
+          { "label": "2 HD", "value": "2" },
+          { "label": "1 SD", "value": "1" }
+        ]
+      },
+      {
+        "type": "select",
+        "field": "wizard_lan",
+        "label": "连接方式",
+        "initValue": "prefer",
+        "options": [
+          { "label": "优先局域网，失败回落中继 (prefer)", "value": "prefer" },
+          { "label": "只用局域网 (only)", "value": "only" },
+          { "label": "只用中继 (off)", "value": "off" }
+        ]
+      },
+      {
+        "type": "text",
+        "field": "wizard_pts_lead",
+        "label": "画面提前量（毫秒）",
+        "initValue": "100",
+        "rules": [
+          { "pattern": "^[0-9]+$", "message": "请填数字" }
+        ]
+      },
+      {
+        "type": "tips",
+        "helpText": "保存后会重建容器。首次拉取镜像可能需要几分钟。"
+      }
+    ]
+  }
+]

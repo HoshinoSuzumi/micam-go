@@ -201,6 +201,23 @@ docker compose logs -f
 docker compose logs | grep -E "direct local session|connecting via"
 ```
 
+### 打包成 fnOS 应用（fpk）
+
+`packaging/fnos/` 是一套按飞牛规范写的应用包，用 `fnpack` 构建后可从应用中心安装：
+
+| 需求 | 由谁提供 |
+|---|---|
+| 配置 | 「应用设置」里的表单（`wizard/config`）：账号、userId、passToken、DID、清晰度、连接方式 |
+| 启动 / 停止 / 状态 | 应用中心，由 `cmd/main` 的 `start`/`stop`/`status` 实现 |
+| 界面 | 应用卡片打开 `app/www/index.html`，走 CGI，不额外占端口 |
+
+```sh
+make fpk     # 需要 fnpack：https://developer.fnnas.com/docs/cli/fnpack
+```
+
+包结构、安装后的目录布局，以及几处**需要真机确认**的地方见
+[`packaging/fnos/README.md`](packaging/fnos/README.md)。
+
 ### 发布新镜像
 
 ```sh

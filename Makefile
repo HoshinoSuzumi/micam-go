@@ -6,7 +6,7 @@ BIN ?= micam
 IMAGE ?= hoshinosuzumi/micam-go
 TAG ?= dev
 
-.PHONY: fmt vet test build cross docker docker-push docker-push-multi clean
+.PHONY: fmt vet test build cross docker docker-push docker-push-multi fpk clean
 
 fmt:
 	gofmt -w .
@@ -41,6 +41,14 @@ docker-push:
 docker-push-multi:
 	docker buildx build --platform linux/amd64,linux/arm64 \
 		-t $(IMAGE):$(TAG) -t $(IMAGE):latest --push .
+
+# Build the fnOS application package. Needs fnpack:
+# https://developer.fnnas.com/docs/cli/fnpack
+fpk:
+	@command -v fnpack >/dev/null 2>&1 || { \
+		echo "fnpack not found - download it from https://developer.fnnas.com/docs/cli/fnpack"; \
+		exit 1; }
+	fnpack build --directory packaging/fnos
 
 clean:
 	rm -rf bin

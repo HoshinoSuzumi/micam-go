@@ -1,0 +1,37 @@
+#!/bin/sh
+# 安装后：准备配置目录、默认 env 与空的 token 文件。
+#
+# compose 里 env_file 指向 micam.env，文件不存在会让 compose 直接失败，所以
+# 这一步必须保证两个文件都在。脚本可重复执行。
+set -eu
+
+ETC="${TRIM_PKGETC:-/var/apps/micam/etc}"
+VAR="${TRIM_PKGVAR:-/var/apps/micam/var}"
+
+mkdir -p "$ETC" "$VAR"
+
+if [ ! -f "$ETC/micam.env" ]; then
+    umask 077
+    cat > "$ETC/micam.env" <<'EOF'
+MICAM_BIND=0.0.0.0
+MICAM_PORT=8554
+MICAM_REGION=cn
+MICAM_QUALITY=3
+MICAM_PTS_LEAD=100
+MICAM_LAN=prefer
+MICAM_RECONNECT=5
+MICAM_PASS_TOKEN_FILE=/run/secrets/pass_token
+EOF
+fi
+
+if [ ! -f "$ETC/pass_token" ]; then
+    umask 077
+    : > "$ETC/pass_token"
+fi
+
+chmod 600 "$ETC/micam.env" "$ETC/pass_token" 2>/dev/null || true
+
+# 容器以 uid 10001 运行（Dockerfile 里的 micam 用户），数据目录必须让它可写。
+chown -R 10001:10001 "$VAR" 2>/dev/null || true
+
+exit 0

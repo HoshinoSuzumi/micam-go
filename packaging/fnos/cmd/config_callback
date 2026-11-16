@@ -1,0 +1,44 @@
+#!/bin/sh
+# 配置变更后：把向导收集到的值写成 env 文件与 token 文件，再重建容器。
+#
+# 向导值来自同名字段：wizard_user / wizard_user_id / wizard_region /
+# wizard_did / wizard_quality / wizard_lan / wizard_pts_lead / wizard_pass_token。
+set -eu
+
+ETC="${TRIM_PKGETC:-/var/apps/micam/etc}"
+VAR="${TRIM_PKGVAR:-/var/apps/micam/var}"
+COMPOSE_FILE="${TRIM_APPDEST:-/var/apps/micam/target}/docker/docker-compose.yaml"
+
+mkdir -p "$ETC" "$VAR"
+umask 077
+
+cat > "$ETC/micam.env" <<EOF
+MICAM_BIND=0.0.0.0
+MICAM_PORT=8554
+MICAM_USER=${wizard_user:-}
+MICAM_USER_ID=${wizard_user_id:-}
+MICAM_REGION=${wizard_region:-cn}
+MICAM_DID=${wizard_did:-}
+MICAM_QUALITY=${wizard_quality:-3}
+MICAM_PTS_LEAD=${wizard_pts_lead:-100}
+MICAM_LAN=${wizard_lan:-prefer}
+MICAM_RECONNECT=5
+MICAM_PASS_TOKEN_FILE=/run/secrets/pass_token
+EOF
+chmod 600 "$ETC/micam.env"
+
+printf '%s' "${wizard_pass_token:-}" > "$ETC/pass_token"
+chmod 600 "$ETC/pass_token"
+
+chown -R 10001:10001 "$VAR" 2>/dev/null || true
+
+if [ -z "${wizard_did:-}" ]; then
+    echo "缺少 DID，服务不会自动启动。" >> "${TRIM_TEMP_LOGFILE:-/dev/null}"
+    exit 0
+fi
+
+if [ -f "$COMPOSE_FILE" ]; then
+    docker compose -f "$COMPOSE_FILE" -p micam up -d --force-recreate
+fi
+
+exit 0

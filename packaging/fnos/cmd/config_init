@@ -1,0 +1,10 @@
+#!/bin/sh
+# 配置变更前：先停掉容器，等 callback 用新配置重建。
+set -eu
+
+COMPOSE_FILE="${TRIM_APPDEST:-/var/apps/micam/target}/docker/docker-compose.yaml"
+
+if [ -f "$COMPOSE_FILE" ]; then
+    docker compose -f "$COMPOSE_FILE" -p micam down 2>/dev/null || true
+fi
+exit 0

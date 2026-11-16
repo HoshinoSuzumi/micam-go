@@ -1,0 +1,28 @@
+# 由飞牛 fnOS 以 root 身份、在 TRIM_* 环境变量下执行。
+#
+# 路径都带默认值：如果 compose 是被框架而不是本脚本调用的，TRIM_PKGETC /
+# TRIM_PKGVAR 仍会由 fnOS 提供；万一没有，退回到文档里约定的 /var/apps 布局。
+services:
+  micam:
+    image: hoshinosuzumi/micam-go:${MICAM_TAG:-latest}
+    container_name: micam
+    restart: unless-stopped
+    stop_grace_period: 20s
+
+    # LAN 直连依赖 255.255.255.255 广播，bridge 网络送不出去。
+    network_mode: host
+
+    env_file:
+      - ${TRIM_PKGETC:-/var/apps/micam/etc}/micam.env
+
+    volumes:
+      # 凭据与会话缓存（HOME=/data）
+      - ${TRIM_PKGVAR:-/var/apps/micam/var}:/data
+      # passToken 只读挂载
+      - ${TRIM_PKGETC:-/var/apps/micam/etc}/pass_token:/run/secrets/pass_token:ro
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
