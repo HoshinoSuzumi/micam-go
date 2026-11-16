@@ -23,6 +23,7 @@ type Options struct {
 	PassToken string
 	DID       string
 	Bind      string
+	DataDir   string
 	Port      int
 	Quality   int
 
@@ -60,6 +61,8 @@ func Parse(args []string) (*Options, error) {
 	fs.StringVar(&opts.DID, "did", envOr("MICAM_DID", ""), "device id of the camera to stream")
 	fs.StringVar(&opts.Bind, "bind", envOr("MICAM_BIND", "127.0.0.1"),
 		"address the MPEG-TS server listens on")
+	fs.StringVar(&opts.DataDir, "data-dir", envOr("MICAM_DATA_DIR", ""),
+		"directory holding credentials.json (default: $HOME/.micam)")
 	fs.IntVar(&opts.Port, "port", envIntOr("MICAM_PORT", 8554), "local HTTP port")
 	fs.IntVar(&opts.Quality, "quality", envIntOr("MICAM_QUALITY", 2),
 		"0 auto, 1 sd, 2 hd, 3 full")

@@ -61,6 +61,21 @@ func DefaultStore() (*Store, error) {
 	return &Store{Path: filepath.Join(home, ".micam", "credentials.json")}, nil
 }
 
+// StoreAt keeps credentials.json inside dir. It exists because the home
+// directory is not always writable: a locked-down profile, a service account,
+// or a container with a read-only root all leave no place for the session to
+// live.
+func StoreAt(dir string) (*Store, error) {
+	if dir == "" {
+		return DefaultStore()
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, fmt.Errorf("creds: bad data directory %q: %w", dir, err)
+	}
+	return &Store{Path: filepath.Join(abs, "credentials.json")}, nil
+}
+
 // Load returns the stored credentials, or an empty set when the file does not
 // exist yet.
 func (s *Store) Load() (*Credentials, error) {

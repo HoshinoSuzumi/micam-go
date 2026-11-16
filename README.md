@@ -67,6 +67,7 @@ micam --did 1234567890 --region cn --port 8554
 | `--quality` | `2` | 0 auto / 1 SD / 2 HD / 3 full |
 | `--list-cameras` | off | 只登录并列出摄像头（DID / 型号 / 在线状态）后退出，不连中继、不开端口 |
 | `--reconnect` | `0` | 断流后自动重连的次数；`0` 表示不重连，交给编排层重启 |
+| `--data-dir` | `~/.micam` | 存放 `credentials.json` 的目录；家目录不可写时用它换位置 |
 | `--connect-timeout` | `90` | 中继握手总超时（秒） |
 | `--pass-token` | — | 浏览器复制的 `passToken`，免密码免 2FA |
 | `--relogin` | off | 丢弃缓存会话重新登录 |

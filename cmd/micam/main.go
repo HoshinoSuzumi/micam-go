@@ -55,9 +55,9 @@ func run(args []string) int {
 }
 
 func serve(ctx context.Context, opts *cli.Options, log *slog.Logger) int {
-	store, err := creds.DefaultStore()
+	store, err := creds.StoreAt(opts.DataDir)
 	if err != nil {
-		log.Error("cannot locate the credentials file", "err", err)
+		log.Error("cannot resolve the credentials directory", "err", err)
 		return exitLogin
 	}
 	if opts.Relogin {
@@ -89,9 +89,14 @@ func serve(ctx context.Context, opts *cli.Options, log *slog.Logger) int {
 	}
 
 	// Persist the device id right away: Xiaomi binds two-factor approval to it,
-	// so it must stay stable across runs even when login fails.
+	// so it must stay stable across runs. A write failure is fatal: running on
+	// would silently rotate the device id on every start.
 	if err := store.Save(c); err != nil {
-		log.Warn("cannot save the credentials", "err", err)
+		log.Error("cannot write the credentials",
+			"path", store.Path,
+			"hint", "pass --data-dir with a writable directory",
+			"err", err)
+		return exitLogin
 	}
 
 	if !c.HasSession() {

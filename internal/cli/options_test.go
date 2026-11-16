@@ -69,6 +69,26 @@ func TestParseNewFlags(t *testing.T) {
 	}
 }
 
+func TestParseDataDir(t *testing.T) {
+	clearEnv(t)
+
+	opts, err := Parse(nil)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if opts.DataDir != "" {
+		t.Fatalf("data dir = %q, want empty (default)", opts.DataDir)
+	}
+
+	opts, err = Parse([]string{"--data-dir", `D:\micam-data`})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if opts.DataDir != `D:\micam-data` {
+		t.Fatalf("data dir = %q", opts.DataDir)
+	}
+}
+
 func TestParseRejectsNegativeReconnect(t *testing.T) {
 	clearEnv(t)
 
