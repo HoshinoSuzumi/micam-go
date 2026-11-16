@@ -1,0 +1,35 @@
+services:
+  micam:
+    build: .
+    image: micam:latest
+    container_name: micam
+    restart: unless-stopped
+    stop_grace_period: 20s
+
+    # UDP egress to the rendezvous servers and the relay must not be blocked.
+    # No inbound ports are needed for the P2P path; 8554 is only for players.
+    ports:
+      - "8554:8554"
+
+    environment:
+      MICAM_USER: "${MICAM_USER}"
+      MICAM_REGION: "${MICAM_REGION:-cn}"
+      MICAM_DID: "${MICAM_DID}"
+      # Prefer a file over an environment variable: env values are visible in
+      # `docker inspect` output.
+      MICAM_PASS_TOKEN_FILE: /run/secrets/pass_token
+      MICAM_BIND: 0.0.0.0
+      MICAM_PORT: "8554"
+      MICAM_QUALITY: "2"
+
+    volumes:
+      # Credentials and the cached session live here.
+      - ./data:/data
+      # A passToken is roughly as powerful as the account password.
+      - ./secrets/pass_token:/run/secrets/pass_token:ro
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

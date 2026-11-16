@@ -1,0 +1,6 @@
+# Keep LF everywhere: a CRLF Dockerfile breaks RUN line-continuations and a
+# CRLF Makefile breaks make.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary

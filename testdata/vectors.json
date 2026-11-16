@@ -1,0 +1,253 @@
+{
+  "meta": {
+    "schema": 1,
+    "spec": "docs/PROTOCOL.md",
+    "upstream": "https://github.com/eugeneRover/micam",
+    "upstream_commit": "2cc9d9e7607014d1d05c17bc5676544fbb0d5d24",
+    "note": "Golden vectors from the upstream Java test suite. Upstream states they were produced by independent reference implementations and real captures, not by the code under test, so a port cannot merely agree with itself.",
+    "generated_by": "tools/verify_vectors.py (independent stdlib re-implementation)"
+  },
+
+  "uid": [
+    {
+      "id": "uid.ABCDEF-123456-GHIJK",
+      "text": "ABCDEF-123456-GHIJK",
+      "prefix": "ABCDEF",
+      "serial": 123456,
+      "check": "GHIJK",
+      "hex": "41424344454600000001e2404748494a4b000000",
+      "len": 20
+    }
+  ],
+
+  "addrblock": [
+    {
+      "id": "addrblock.203.0.113.8:29736",
+      "ip": "203.0.113.8",
+      "port": 29736,
+      "hex": "00022874087100cb0000000000000000"
+    },
+    {
+      "id": "addrblock.203.0.113.9:25000",
+      "ip": "203.0.113.9",
+      "port": 25000,
+      "hex": "0002a861097100cb0000000000000000"
+    },
+    {
+      "id": "addrblock.203.0.113.7:28723",
+      "ip": "203.0.113.7",
+      "port": 28723,
+      "hex": "00023370077100cb0000000000000000"
+    },
+    {
+      "id": "addrblock.decode.192.168.0.5:28723",
+      "ip": "192.168.0.5",
+      "port": 28723,
+      "hex": "000233700500a8c00000000000000000"
+    }
+  ],
+
+  "frame": {
+    "encode": [
+      {
+        "id": "frame.list_req1",
+        "type": 103,
+        "type_name": "LIST_REQ1",
+        "payload_hex": "41424344454600000001e2404748494a4b000000",
+        "hex": "f167001441424344454600000001e2404748494a4b000000"
+      },
+      {
+        "id": "frame.rly_req",
+        "type": 128,
+        "type_name": "RLY_REQ",
+        "payload_hex": "41424344454600000001e2404748494a4b00000000022874087100cb000000000000000055667788",
+        "hex": "f180002841424344454600000001e2404748494a4b00000000022874087100cb000000000000000055667788"
+      },
+      {
+        "id": "frame.rly_pkt.discovery_token",
+        "type": 131,
+        "type_name": "RLY_PKT",
+        "payload_hex": "1122334441424344454600000001e2404748494a4b00000000000000",
+        "hex": "f183001c1122334441424344454600000001e2404748494a4b00000000000000"
+      },
+      {
+        "id": "frame.rly_pkt.session_token",
+        "type": 131,
+        "type_name": "RLY_PKT",
+        "payload_hex": "5566778841424344454600000001e2404748494a4b00000000000000",
+        "hex": "f183001c5566778841424344454600000001e2404748494a4b00000000000000"
+      }
+    ],
+    "decode": [
+      {
+        "id": "frame.parse.rly_rdy",
+        "hex": "f184001441424344454600000001e2404748494a4b000000",
+        "type": 132,
+        "type_name": "RLY_RDY",
+        "payload_hex": "41424344454600000001e2404748494a4b000000"
+      }
+    ],
+    "reject": [
+      { "id": "frame.reject.too_short", "hex": "0011", "reason": "shorter than the 4-byte header" },
+      { "id": "frame.reject.bad_magic", "hex": "de840014", "reason": "first byte is not 0xF1" }
+    ]
+  },
+
+  "relay_port_ack": [
+    {
+      "id": "relay_port_ack.55667788",
+      "payload_hex": "5566778874280000",
+      "token_hex": "55667788",
+      "port": 29736,
+      "note": "the port is big-endian here, unlike the port inside a 16-byte address block"
+    }
+  ],
+
+  "initstring": [
+    {
+      "id": "initstring.cs2_vendor",
+      "enc": "EBGBEPBPKGJKHOJOELGHEKEKHLMFHLNCGKELBICIBJIILILDCABCCGODHBKHJFKGBGNLLHCMPHNOAEDHICMMIEBANPOLBD",
+      "raw": "104.166.181.58,169.197.116.186,169.197.116.216,",
+      "servers": ["104.166.181.58", "169.197.116.186", "169.197.116.216"]
+    },
+    {
+      "id": "initstring.third_party_a",
+      "enc": "EDHNFGBILOINGGIGFDHHFKFIGNNIHDMFHCEEABDGBAIHKPKCCMBLCPOJHBKGJGKABDMJLKCGPFMH",
+      "suffix": ":camera",
+      "raw": "3.10.99.101,139.9.86.167,3.227.45.161,",
+      "servers": ["3.10.99.101", "139.9.86.167", "3.227.45.161"]
+    },
+    {
+      "id": "initstring.third_party_b",
+      "enc": "EBGDEOBOKGICGAIAFFGNEAFMGPMHGFNDGNFLBHDKADJGLBKFDOBEDGPEHAKBIJLMBG",
+      "suffix": ":camera",
+      "raw": "127.0.0.1,127.0.0.1,139.9.86.167,",
+      "servers": ["127.0.0.1", "127.0.0.1", "139.9.86.167"]
+    }
+  ],
+
+  "miss_setup": {
+    "request_hex": "a1010030aabbccdd0102030405060708090a0b0c41424344454600000001e2404748494a4b0000000002fe70146433c6000000000000000002007033cb00710700023370077100cb0000000000000000ddccbbaa00000000",
+    "reply_hex": "a1020030aabbccdd0102030405060708090a0b0c41424344454600000001e2404748494a4b0000000002fe70146433c60000000000000000feffffffddccbbaa0002e46d0200000a0000000000000000020070fec6336414",
+    "local": { "ip": "10.0.0.2", "port": 28132 },
+    "external": { "ip": "198.51.100.20", "port": 28926 },
+    "len": 88,
+    "compact": [
+      {
+        "id": "miss_setup.compact.198.51.100.20:28926",
+        "ip": "198.51.100.20",
+        "port": 28926,
+        "hex": "020070fec6336414"
+      },
+      {
+        "id": "miss_setup.compact.203.0.113.7:28723",
+        "ip": "203.0.113.7",
+        "port": 28723,
+        "hex": "02007033cb007107"
+      }
+    ]
+  },
+
+  "drw": {
+    "acks": [
+      { "id": "drw.ack.ch0.seq0", "channel": 0, "seq": 0, "hex": "f1d10006d10000010000" },
+      { "id": "drw.ack.ch0.seq1", "channel": 0, "seq": 1, "hex": "f1d10006d10000010001" },
+      { "id": "drw.ack.ch2.seq5", "channel": 2, "seq": 5, "hex": "f1d10006d10200010005" }
+    ],
+    "auth_response": {
+      "id": "drw.auth_response",
+      "cmd": 257,
+      "json": "{\"result\":\"success\", \"channel\": \"0000000000000\"}",
+      "json_len": 48,
+      "declared_len": 52,
+      "polled_len": 52,
+      "note": "declared_len covers the 4-byte command word plus the 48-byte body; the polled message is command+body."
+    }
+  },
+
+  "cloud": {
+    "ssecurity": "AAECAwQFBgcICQoLDA0ODw==",
+    "nonce": "ZGVmZ2hpamtsbW5v",
+    "signed_nonce": "+JfC+ScjV+jXa9PgCRtBpAfTWAAwPFTV0LabBt47GcA=",
+    "url": "https://ru.api.io.mi.com/app/miotspec/action",
+    "api_path": "/miotspec/action",
+    "api_paths": [
+      { "url": "https://ru.api.io.mi.com/app/miotspec/action", "path": "/miotspec/action" },
+      { "url": "https://ru.api.io.mi.com/app/home/device_list", "path": "/home/device_list" },
+      { "url": "https://api.io.mi.com/app/v2/device/miss_get_vendor", "path": "/v2/device/miss_get_vendor" }
+    ],
+    "data": "{\"params\":{\"did\":\"123456789\",\"siid\":7,\"aiid\":1,\"in\":[2]}}",
+    "rc4": {
+      "key": "+JfC+ScjV+jXa9PgCRtBpAfTWAAwPFTV0LabBt47GcA=",
+      "plaintext": "hello",
+      "cipher_b64": "Y1eBu4k=",
+      "note": "key is base64-encoded and must be decoded to 32 raw bytes; the first 1024 keystream bytes are discarded"
+    },
+    "signature_plaintext": {
+      "method": "POST",
+      "params_order": ["data"],
+      "expected": "AiqNDmRuhOGPAU3o/ycFjHD/eBg="
+    },
+    "encrypted_body": {
+      "order": ["data", "rc4_hash__", "signature", "ssecurity", "_nonce"],
+      "data": "cBCdtpTGmDYVGyh0VbweH+asp7tBAWf9ZkrfZYeLOSgF0XDRVUmHwAdhrkcv9P2PGget6KnTKL/Q",
+      "rc4_hash__": "SlucmaLKpzBfbhQGcIBJUvP39c8YfRbkNDCBeg==",
+      "signature": "8DE/h2cWWq+nYASgAJcon6ehywo=",
+      "ssecurity": "AAECAwQFBgcICQoLDA0ODw==",
+      "_nonce": "ZGVmZ2hpamtsbW5v"
+    },
+    "nonce_len": 12
+  },
+
+  "crypto": {
+    "x25519": {
+      "alice_priv": "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+      "alice_pub": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+      "bob_priv": "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb",
+      "bob_pub": "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f",
+      "shared": "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742",
+      "source": "RFC 7748 section 6.1"
+    },
+    "hsalsa20": {
+      "input": "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742",
+      "nonce16": "00000000000000000000000000000000",
+      "core": "1b27556473e985d462cd51197a9a46c76009549eac6474f206c4ee0844f68389",
+      "source": "NaCl tests/core1.c"
+    },
+    "session_key": {
+      "priv": "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+      "pub": "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f",
+      "expected": "1b27556473e985d462cd51197a9a46c76009549eac6474f206c4ee0844f68389",
+      "note": "crypto_box_beforenm; must differ from the raw X25519 output above"
+    }
+  },
+
+  "ts": {
+    "crc32_mpeg2": { "input_ascii": "123456789", "expected_hex": "0376e6e7" },
+    "packet_size": 188,
+    "sync_byte": 71,
+    "pids": { "pat": 0, "pmt": 4096, "video": 256 },
+    "stream_types": { "h264": 27, "h265": 36 },
+    "pmt_stream_type_offset": 17,
+    "pts_offset_ticks": 27000,
+    "clock_hz": 90000,
+    "nominal_frame_ms": 50,
+    "max_plausible_gap_ms": 1000,
+    "table_interval_frames": 20,
+    "pts_cases": [
+      { "id": "ts.pts.zero", "value": 0, "hex": "2100010001" },
+      { "id": "ts.pts.27000", "value": 27000, "hex": "210001d2f1" },
+      { "id": "ts.pts.max33", "value": 8589934591, "hex": "2fffffffff" }
+    ],
+    "pcr_cases": [
+      { "id": "ts.pcr.zero", "value": 0, "hex": "000000007e00" },
+      { "id": "ts.pcr.27000", "value": 27000, "hex": "000034bc7e00" }
+    ],
+    "gap_case": { "delta_ms": 80, "ticks": 7200 },
+    "monotonic_case": {
+      "timestamps_ms": [100000, 100039, 100092, 100145, 100142, 100242, 100242, 100242],
+      "expected_elapsed_ms": [0, 39, 92, 145, 195, 295, 345, 395],
+      "note": "backwards and repeated deltas fall back to nominal 50ms"
+    }
+  }
+}

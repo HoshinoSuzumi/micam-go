@@ -1,0 +1,16 @@
+# build output
+/bin/
+/micam
+/micam.exe
+*.exe
+
+# runtime state: credentials and the cached session live here
+/data/
+/secrets/
+
+# local toolchains and caches
+/.tmp/
+
+# logs and editor noise
+*.log
+.DS_Store
