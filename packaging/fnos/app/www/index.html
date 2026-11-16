@@ -30,7 +30,7 @@
     }
 
     main {
-      width: min(680px, 100%);
+      width: min(720px, 100%);
       background: var(--card);
       border: 1px solid var(--line);
       border-radius: 14px;
@@ -40,6 +40,12 @@
     h1 {
       margin: 0 0 4px;
       font-size: 22px;
+    }
+
+    h2 {
+      margin: 26px 0 10px;
+      font-size: 16px;
+      color: var(--fg);
     }
 
     .sub {
@@ -86,8 +92,8 @@
 
     button:hover { border-color: var(--accent); }
 
-    ul { margin: 8px 0 0; padding-left: 20px; color: var(--muted); }
-    li { margin: 2px 0; }
+    ul, ol { margin: 8px 0 0; padding-left: 22px; color: var(--muted); }
+    li { margin: 4px 0; }
 
     .note {
       margin-top: 22px;
@@ -98,6 +104,31 @@
     }
 
     a { color: var(--accent); }
+
+    details {
+      margin-top: 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px 14px;
+      background: #0b1220;
+    }
+
+    summary {
+      cursor: pointer;
+      color: var(--fg);
+      font-weight: 600;
+    }
+
+    kbd {
+      padding: 1px 6px;
+      border: 1px solid var(--line);
+      border-bottom-width: 2px;
+      border-radius: 4px;
+      font: 12px ui-monospace, monospace;
+      color: var(--fg);
+    }
+
+    .warn { color: #fca5a5; }
   </style>
 </head>
 
@@ -119,12 +150,49 @@
       <li><code>ffplay -fflags nobuffer &lt;地址&gt;</code></li>
     </ul>
 
-    <p class="note">
-      这个流<strong>没有鉴权</strong>，只适合可信网段。想在外面看，请套一层
-      Tailscale / WireGuard，或在前面放带认证的反向代理。
-      <br />
-      画面卡顿但日志正常，多半是播放器软件解码跟不上 2K H.265——换硬件解码即可。
+    <h2>还没画面？</h2>
+    <p class="sub" style="margin:0">
+      第一次安装后需要先配置：打开「应用设置」，填入小米账号、<code>userId</code>、<code>passToken</code>
+      和摄像头 DID。保存后容器会自动重建并开始取流。
     </p>
+
+    <h2>如何获取 userId 与 passToken</h2>
+    <p class="sub" style="margin:0">
+      小米没有提供这类凭据的界面，只能从浏览器的登录 Cookie 里取。用 Chrome 或 Edge 都行。
+    </p>
+
+    <ol>
+      <li>在浏览器里打开 <a href="https://account.xiaomi.com" target="_blank" rel="noreferrer">account.xiaomi.com</a>
+        并登录（就是你平时登录米家 App 的那个账号）。</li>
+      <li>按 <kbd>F12</kbd> 打开开发者工具，切到 <strong>Application</strong>（中文版是「应用」）标签。</li>
+      <li>左侧展开 <strong>Storage → Cookies → https://account.xiaomi.com</strong>。</li>
+      <li>在右上角的过滤框里输入 <code>userId</code>，找到<strong>名字正好是 userId</strong> 的那一行，
+        复制它的 <strong>Value</strong>——是一串纯数字，例如 <code>1234567890</code>。</li>
+      <li>再把过滤框改成 <code>passToken</code>，同样找到名字正好是 <code>passToken</code> 的行，
+        复制 Value。它比 userId 长得多。</li>
+    </ol>
+
+    <details>
+      <summary>几个容易踩的点</summary>
+      <ul>
+        <li><strong>别拿错行</strong>：列表里还有 <code>cUserId</code>、<code>serviceToken</code> 等，
+          名字必须完全对应 <code>userId</code> 和 <code>passToken</code>。</li>
+        <li><strong>userId 是纯数字</strong>，不是手机号，也不是账号名。填手机号的话登录会报
+          「passToken 被拒绝」。</li>
+        <li><strong>密码登录常被二次验证拦住</strong>。那种验证码绑定的是浏览器自己的设备标识，
+          确认了也没用——所以这里只支持 passToken。</li>
+        <li><strong>passToken 等同账号密码</strong>。它能让持有者访问你账号下的设备，别贴到聊天群、
+          别提交进仓库。应用只把它存在 NAS 本地（0600 权限），不会外传。</li>
+        <li>想更安全的话，用小米的「设备共享」把摄像头共享给一个小号，用那个小号登录。</li>
+      </ul>
+    </details>
+
+    <h2>已知限制</h2>
+    <ul>
+      <li>这个流<strong>没有鉴权</strong>，只适合可信网段。要在外面看，请套 Tailscale / WireGuard，
+        或在前面放带认证的反向代理。</li>
+      <li>画面卡顿但日志正常，多半是播放器软件解码跟不上 2K H.265 —— 换硬件解码即可。</li>
+    </ul>
   </main>
 
   <script>

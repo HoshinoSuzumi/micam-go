@@ -3,6 +3,10 @@
     "stepTitle": "小米账号",
     "items": [
       {
+        "type": "tips",
+        "helpText": "userId 和 passToken 只能从浏览器 Cookie 里取：登录 account.xiaomi.com → 按 F12 → Application → Cookies。应用的首页有逐步截图说明。两者都填错会导致登录失败，userId 是纯数字，不是手机号。"
+      },
+      {
         "type": "text",
         "field": "wizard_user",
         "label": "账号（uid / 手机 / 邮箱）",
@@ -40,6 +44,10 @@
         "rules": [
           { "required": true, "message": "请粘贴 passToken" }
         ]
+      },
+      {
+        "type": "tips",
+        "helpText": "passToken 等同账号密码：它能让持有者访问你账号下的设备。应用只把它存在 NAS 本地（0600），但请不要贴到聊天群或提交进仓库。密码登录常被二次验证拦住，而那个验证码绑定浏览器设备，所以这里只支持 passToken。"
       }
     ]
   },

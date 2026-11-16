@@ -160,6 +160,20 @@ printf '%s' "$PASS_TOKEN" > secrets/pass_token
 
 `passToken` 近似等价于账号密码，务必 `chmod 600`。
 
+### 怎么取 userId 与 passToken
+
+两者都只在登录后的 Cookie 里，小米没有提供查看它们的界面：
+
+1. 浏览器（Chrome / Edge）打开 `https://account.xiaomi.com` 并登录；
+2. 按 <kbd>F12</kbd> → **Application**（应用）→ **Storage → Cookies → `https://account.xiaomi.com`**；
+3. 过滤框输入 `userId`，取**名字正好是 `userId`** 那一行的 Value：一串纯数字；
+4. 过滤框改成 `passToken`，取对应 Value（长得多）。
+
+三个常见错误：把手机号当 `userId`（登录会报 passToken 被拒绝）；取了 `cUserId` 或
+`serviceToken`；把 `passToken` 泄露到仓库里——它能访问你账号下的所有设备。
+
+想降低风险，可以用小米的「设备共享」把摄像头共享给一个小号，用那个小号登录。
+
 ## Docker（ARM fnOS）
 
 镜像由 GitHub Actions 构建，本机不需要 Docker：
