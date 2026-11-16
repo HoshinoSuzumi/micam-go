@@ -2,6 +2,10 @@
 #
 # 路径都带默认值：如果 compose 是被框架而不是本脚本调用的，TRIM_PKGETC /
 # TRIM_PKGVAR 仍会由 fnOS 提供；万一没有，退回到文档里约定的 /var/apps 布局。
+#
+# 这里刻意不使用 env_file：它在 compose 解析阶段就是硬依赖，而 micam.env 要等
+# install_callback 才生成，飞牛启动项目的时机更早，安装会直接失败。改成把配置
+# 目录只读挂进容器，由 entrypoint 自己读取，文件不在时用下面的默认值继续跑。
 services:
   micam:
     image: hoshinosuzumi/micam-go:${MICAM_TAG:-latest}
@@ -12,14 +16,36 @@ services:
     # LAN 直连依赖 255.255.255.255 广播，bridge 网络送不出去。
     network_mode: host
 
-    env_file:
-      - ${TRIM_PKGETC:-/var/apps/micam/etc}/micam.env
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -a
+        [ -f /etc/micam/micam.env ] && . /etc/micam/micam.env
+        set +a
+
+        # 还没配置就待住，不要退出：restart 策略会把"秒退"变成无限重启，
+        # 安装完成的那一刻就会刷满日志。配上之后 config_callback 会重建容器。
+        #
+        # $$ 是给 compose 的转义：不写成 $$ 的话它会在宿主机上先展开成空串，
+        # 容器里就永远判定为"未配置"。
+        if [ -z "$${MICAM_DID:-}" ]; then
+          echo "micam: 尚未配置，请在「应用设置」里填写账号与摄像头 DID" >&2
+          while :; do sleep 3600; done
+        fi
+
+        exec micam
+
+    environment:
+      MICAM_BIND: "0.0.0.0"
+      MICAM_PORT: "8554"
+      MICAM_PASS_TOKEN_FILE: /etc/micam/pass_token
 
     volumes:
       # 凭据与会话缓存（HOME=/data）
       - ${TRIM_PKGVAR:-/var/apps/micam/var}:/data
-      # passToken 只读挂载
-      - ${TRIM_PKGETC:-/var/apps/micam/etc}/pass_token:/run/secrets/pass_token:ro
+      # 配置目录：micam.env 与 pass_token，只读
+      - ${TRIM_PKGETC:-/var/apps/micam/etc}:/etc/micam:ro
 
     logging:
       driver: json-file

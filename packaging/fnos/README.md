@@ -52,7 +52,14 @@ make fpk
   多余的；脚本都写成了幂等操作（`up -d` 不会重复创建，`down` 重复执行无害），两条路径都能跑。
 - **`run-as: root`**。官方建议普通应用用 `package` 模式，但生命周期脚本要调 `docker compose`，
   需要 docker socket 权限。如果 fnOS 允许 `package` 用户访问 docker 组，应改回最小权限。
-- **`checkport=false`**。容器用 host 网络，端口检查交给 compose，避免和应用中心重复判断。
+
+已经踩过并修掉的两个坑，留作记录：
+
+- **不用 `env_file`**。它在 compose 解析阶段就是硬依赖，而 `micam.env` 要等 `install_callback`
+  才生成，而飞牛启动项目更早 —— 安装会报 `env file ... not found`。现在改成把配置目录只读挂进
+  容器（`/etc/micam`），由 entrypoint 用 `set -a; .` 读取，文件缺失时用默认值继续。
+- **未配置时不要退出**。缺 `MICAM_DID` 时程序会退出，而 `restart: unless-stopped` 会把它变成
+  无限重启。entrypoint 在未配置时改为 `sleep` 等待，配置保存后 `config_callback` 重建容器。
 
 排查时优先看 `TRIM_TEMP_LOGFILE` 里的输出，以及 `/var/apps/micam/var` 下的容器日志。
 

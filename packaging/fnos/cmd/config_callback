@@ -30,6 +30,8 @@ chmod 600 "$ETC/micam.env"
 printf '%s' "${wizard_pass_token:-}" > "$ETC/pass_token"
 chmod 600 "$ETC/pass_token"
 
+# 容器内的 entrypoint 以 uid 10001 读取配置
+chown 10001:10001 "$ETC/micam.env" "$ETC/pass_token" 2>/dev/null || true
 chown -R 10001:10001 "$VAR" 2>/dev/null || true
 
 if [ -z "${wizard_did:-}" ]; then

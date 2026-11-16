@@ -31,6 +31,10 @@ fi
 
 chmod 600 "$ETC/micam.env" "$ETC/pass_token" 2>/dev/null || true
 
+# 容器里的 entrypoint 以 uid 10001 读取这两个文件，所以要交给它；0600 保证
+# 其他用户仍然读不到。
+chown 10001:10001 "$ETC/micam.env" "$ETC/pass_token" 2>/dev/null || true
+
 # 容器以 uid 10001 运行（Dockerfile 里的 micam 用户），数据目录必须让它可写。
 chown -R 10001:10001 "$VAR" 2>/dev/null || true
 
