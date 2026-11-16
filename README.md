@@ -220,21 +220,36 @@ make fpk     # 需要 fnpack：https://developer.fnnas.com/docs/cli/fnpack
 
 ### 发布新镜像
 
-```sh
-git tag v0.4.0
-git push origin v0.4.0
-```
+### 发布
 
-`.github/workflows/release.yml` 会先跑 `go vet` 和测试，然后构建
-`linux/amd64` + `linux/arm64` 的多架构镜像并推送，同时把两个架构的静态二进制
-上传为工作流产物（不装 Docker 也能直接 `scp` 到 NAS 跑）。
+三个工作流，除 CI 外都是**手动触发**：
+
+| 工作流 | 作用 | 怎么触发 |
+|---|---|---|
+| `ci` | gofmt / vet / test | 推 main 与 PR 时自动 |
+| `release` | 打 tag → 多架构镜像 → 推送；可选顺带打包 fpk | Actions → release → Run workflow |
+| `fpk` | 把某个 tag 打成 `.fpk` | Actions → fpk → Run workflow |
+
+**发版**：Actions → `release` → Run workflow，填版本号（如 `0.5.0`）。工作流会**自己创建
+并推送 `v0.5.0`**，再用它构建镜像——不需要本地 `git tag`。tag 已存在会直接失败，避免覆盖。
+
+两个可选开关：
+
+- `latest`：是否同时把 `latest` 指向这个版本（默认开）；
+- `fpk`：发布完成后自动打包 fnOS 应用包（默认关）。
+
+**只打包 fpk**：Actions → `fpk` → Run workflow。tag 留空表示用仓库里最新的 tag，也可以
+填指定版本；它**只读仓库，不会打 tag**。
+
+产物在工作流的 Artifacts 里：`micam-binaries-<版本>`（两个架构的静态二进制，不装 Docker
+也能 `scp` 到 NAS 跑）和 `micam-fpk-<版本>`（fnOS 安装包）。
 
 GHCR 只需要 `GITHUB_TOKEN`，无需配置。要同时推 Docker Hub，在仓库
 **Settings → Secrets and variables → Actions** 里加：
 
 | Secret | 值 |
 |---|---|
-| `DOCKERHUB_USERNAME` | Docker Hub 用户名 |
+| `DOCKERHUB_USERNAME` | Docker Hub 用户名（小写） |
 | `DOCKERHUB_TOKEN` | Account Settings 里创建的 Access Token（Read & Write） |
 
 没有这两个 secret 时，工作流只推 GHCR，不会失败。

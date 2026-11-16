@@ -1,0 +1,94 @@
+name: fpk
+
+# 打包飞牛 fnOS 应用（.fpk）。
+#
+# 手动触发时可以留空 tag，直接取仓库里最新的 tag；也可以指定某个 tag。
+# 这个工作流只读仓库，不会创建或推送 tag。
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "基于哪个 tag 构建（留空 = 最新的 tag）"
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        description: "基于哪个 tag 构建（留空 = 最新的 tag）"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  FNPACK_VERSION: "1.2.3"
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 需要能看到所有 tag
+
+      - name: Resolve the tag
+        id: ref
+        run: |
+          tag="${{ inputs.tag }}"
+          if [ -z "$tag" ]; then
+            tag=$(git describe --tags --abbrev=0)
+            echo "未指定 tag，使用最新的 $tag"
+          fi
+
+          case "$tag" in
+          v*) ;;
+          *) tag="v$tag" ;;
+          esac
+
+          if ! git rev-parse "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "::error::找不到 tag ${tag}"
+            exit 1
+          fi
+
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the tag
+        run: git checkout "${{ steps.ref.outputs.tag }}"
+
+      - name: Install fnpack
+        run: |
+          url="https://static2.fnnas.com/fnpack/fnpack-${FNPACK_VERSION}-linux-amd64"
+          curl -fsSL -o /usr/local/bin/fnpack "$url"
+          chmod +x /usr/local/bin/fnpack
+          fnpack --help | head -5
+
+      - name: Stamp the version into the package
+        run: |
+          version="${{ steps.ref.outputs.version }}"
+
+          # manifest 的 version 必须和 tag 一致
+          sed -i "s|^version=.*|version=\"${version}\"|" packaging/fnos/manifest
+
+          # 让 fpk 默认拉这个版本的镜像，而不是 latest
+          sed -i "s|:latest}|:${version}}|" packaging/fnos/app/docker/docker-compose.yaml
+
+          grep -n '^version=' packaging/fnos/manifest
+          grep -n 'image:' packaging/fnos/app/docker/docker-compose.yaml
+
+      - name: Build the package
+        run: fnpack build --directory packaging/fnos
+
+      - name: Collect the artifact
+        run: |
+          mkdir -p dist
+          find . -maxdepth 3 -name '*.fpk' -exec cp -v {} dist/ \;
+          ls -lh dist
+          test -n "$(ls -A dist)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: micam-fpk-${{ steps.ref.outputs.version }}
+          path: dist/*.fpk
+          retention-days: 30

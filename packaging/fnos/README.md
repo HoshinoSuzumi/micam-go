@@ -19,7 +19,13 @@ app/www/index.html           应用界面：播放地址与用法
 
 ## 构建
 
-需要 `fnpack`（官方 1.2.3，Windows / Linux 都有）：
+两种方式：
+
+**1. GitHub Actions（推荐，不需要本地工具链）**：Actions → `fpk` → Run workflow。
+tag 留空表示用最新的 tag，也可以指定；工作流会把版本号写进 `manifest`、把镜像 tag
+钉到该版本，再打包。发布镜像时如果勾了 `fpk` 开关，也会自动跑一次。
+
+**2. 本地**：需要 `fnpack`（官方 1.2.3，Windows / Linux 都有）：
 
 <https://developer.fnnas.com/docs/cli/fnpack>
 
@@ -28,9 +34,8 @@ make fpk
 # 等价于：fnpack build --directory packaging/fnos
 ```
 
-产物是 `micam.fpk`，可在应用中心上传安装。
-
-`manifest` 里的 `version` 要和镜像 tag 对齐；发版时可以改成 CI 从 git tag 注入。
+产物是 `micam.fpk`，可在应用中心上传安装。本地构建时记得手动改 `manifest` 里的
+`version`，CI 会替你改。
 
 ## 安装后的样子
 

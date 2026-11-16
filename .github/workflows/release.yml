@@ -1,25 +1,73 @@
 name: release
 
-# Tag a commit to publish:  git tag v0.4.0 && git push origin v0.4.0
-# workflow_dispatch builds the same image without publishing a version tag.
+# 手动触发：填版本号即可，工作流会自己创建并推送 tag，然后构建发布。
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "版本号，例如 0.5.0（带不带 v 都行）"
+        required: true
+        type: string
+      latest:
+        description: "同时把 latest 指向这个版本"
+        required: false
+        default: true
+        type: boolean
+      fpk:
+        description: "发布完成后自动打包 fnOS FPK"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
-  contents: read
-  packages: write # required to push to ghcr.io with GITHUB_TOKEN
+  contents: write # 需要推送 tag
+  packages: write # 需要推送镜像
 
 env:
   GO_VERSION: "1.23"
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  # Docker Hub 仓库名与 GitHub 仓库名不一定相同（这里就不相同）。
   DOCKERHUB_REPO: micam-go
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check the version and create the tag
+        id: version
+        run: |
+          raw="${{ inputs.tag }}"
+          version="${raw#v}"
+
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
+            echo "::error::版本号格式不对：$raw（期望 0.5.0 这种形式）"
+            exit 1
+          fi
+
+          tag="v${version}"
+          if git rev-parse "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "::error::tag ${tag} 已经存在，换一个版本号"
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "micam $version"
+          git push origin "$tag"
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "已创建并推送 tag $tag"
+
   test:
+    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,9 +79,8 @@ jobs:
       - run: go test ./...
 
   binary:
-    # A static binary is a useful fallback: it runs on the NAS without Docker at
-    # all. Attached to the workflow run, not to a release.
-    needs: test
+    # 静态二进制，不装 Docker 也能直接丢到 NAS 上跑。
+    needs: [prepare, test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,12 +101,12 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: micam-binaries
+          name: micam-binaries-${{ needs.prepare.outputs.version }}
           path: dist/*
           retention-days: 30
 
   image:
-    needs: test
+    needs: [prepare, test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,8 +114,7 @@ jobs:
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
-      # Docker Hub is optional. Without the two secrets the image is only pushed
-      # to ghcr.io, which needs nothing beyond GITHUB_TOKEN.
+      # Docker Hub 可选：没有 secrets 时只推 ghcr.io。
       - name: Check for Docker Hub credentials
         id: hub
         env:
@@ -103,8 +149,7 @@ jobs:
           if [ -n "$USER" ]; then
             list="${list},${USER}/${DOCKERHUB_REPO}"
           fi
-          # Registry paths must be lowercase; GitHub account and repository names
-          # keep whatever case their owner chose.
+          # 仓库路径必须小写；GitHub 的账号与仓库名保留原大小写。
           list=$(printf '%s' "$list" | tr '[:upper:]' '[:lower:]')
           echo "list=${list}" >> "$GITHUB_OUTPUT"
 
@@ -114,9 +159,8 @@ jobs:
         with:
           images: ${{ steps.names.outputs.list }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+            type=raw,value=${{ needs.prepare.outputs.version }}
+            type=raw,value=latest,enable=${{ inputs.latest }}
             type=sha,format=short
 
       - name: Build and push
@@ -129,3 +173,11 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  fpk:
+    # 复用 fpk 工作流：比跨工作流 dispatch 可靠，不需要额外 token 权限。
+    needs: [prepare, image]
+    if: ${{ inputs.fpk }}
+    uses: ./.github/workflows/fpk.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
