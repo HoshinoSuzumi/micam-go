@@ -256,7 +256,7 @@ make fpk     # 需要 fnpack：https://developer.fnnas.com/docs/cli/fnpack
 | `draft` | 开 | GitHub Release 建成草稿，检查过产物再手动发布 |
 
 **产物都挂在 GitHub Release 上**：`micam-linux-arm64`、`micam-linux-amd64`，勾了 `fpk`
-时还有 `micam.fpk`。草稿只影响 Release 的可见性，镜像和 tag 都是正常发布的。
+时还有 `micam_<版本>.fpk`。草稿只影响 Release 的可见性，镜像和 tag 都是正常发布的。
 
 **只打包 fpk**：Actions → `fpk` → Run workflow。tag 留空表示用最新的 tag，也可以填指定
 版本；它**只读仓库、不会打 tag**，产物同样挂到对应 tag 的 Release（没有就新建一个草稿）。

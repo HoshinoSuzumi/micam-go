@@ -49,6 +49,11 @@ fpk:
 		echo "fnpack not found - download it from https://developer.fnnas.com/docs/cli/fnpack"; \
 		exit 1; }
 	fnpack build --directory packaging/fnos
+	@version=$$(sed -n 's/^version="\(.*\)"/\1/p' packaging/fnos/manifest); \
+	for f in *.fpk; do \
+		[ -e "$$f" ] || continue; \
+		mv -v "$$f" "micam_$$version.fpk"; \
+	done
 
 clean:
 	rm -rf bin

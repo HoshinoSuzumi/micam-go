@@ -34,7 +34,7 @@ make fpk
 # 等价于：fnpack build --directory packaging/fnos
 ```
 
-产物是 `micam.fpk`，可在应用中心上传安装。本地构建时记得手动改 `manifest` 里的
+产物是 `micam_<版本>.fpk`，可在应用中心上传安装。本地构建时记得手动改 `manifest` 里的
 `version`，CI 会替你改。
 
 ## 安装后的样子
