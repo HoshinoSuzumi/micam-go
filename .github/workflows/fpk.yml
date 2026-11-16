@@ -19,7 +19,7 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write # 上传产物到 GitHub Release（不创建 tag）
 
 env:
   FNPACK_VERSION: "1.2.3"
@@ -92,3 +92,18 @@ jobs:
           name: micam-fpk-${{ steps.ref.outputs.version }}
           path: dist/*.fpk
           retention-days: 30
+
+      - name: Attach the package to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.ref.outputs.tag }}
+          VERSION: ${{ steps.ref.outputs.version }}
+        run: |
+          # 单独跑本工作流时 release 可能还不存在：建一个草稿，保持和其他产物一致。
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --draft --title "micam $VERSION" --generate-notes
+            echo "创建草稿 release $TAG"
+          fi
+
+          ls -lh dist
+          gh release upload "$TAG" dist/*.fpk --clobber

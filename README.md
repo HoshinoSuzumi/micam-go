@@ -233,13 +233,19 @@ make fpk     # 需要 fnpack：https://developer.fnnas.com/docs/cli/fnpack
 **发版**：Actions → `release` → Run workflow，填版本号（如 `0.5.0`）。工作流会**自己创建
 并推送 `v0.5.0`**，再用它构建镜像——不需要本地 `git tag`。tag 已存在会直接失败，避免覆盖。
 
-两个可选开关：
+三个可选开关：
 
-- `latest`：是否同时把 `latest` 指向这个版本（默认开）；
-- `fpk`：发布完成后自动打包 fnOS 应用包（默认关）。
+| 输入 | 默认 | 作用 |
+|---|---|---|
+| `latest` | 开 | 是否同时把 `latest` 指向这个版本 |
+| `fpk` | 关 | 发布完成后自动打包 fnOS 应用包 |
+| `draft` | 开 | GitHub Release 建成草稿，检查过产物再手动发布 |
 
-**只打包 fpk**：Actions → `fpk` → Run workflow。tag 留空表示用仓库里最新的 tag，也可以
-填指定版本；它**只读仓库，不会打 tag**。
+**产物都挂在 GitHub Release 上**：`micam-linux-arm64`、`micam-linux-amd64`，勾了 `fpk`
+时还有 `micam.fpk`。草稿只影响 Release 的可见性，镜像和 tag 都是正常发布的。
+
+**只打包 fpk**：Actions → `fpk` → Run workflow。tag 留空表示用最新的 tag，也可以填指定
+版本；它**只读仓库、不会打 tag**，产物同样挂到对应 tag 的 Release（没有就新建一个草稿）。
 
 产物在工作流的 Artifacts 里：`micam-binaries-<版本>`（两个架构的静态二进制，不装 Docker
 也能 `scp` 到 NAS 跑）和 `micam-fpk-<版本>`（fnOS 安装包）。

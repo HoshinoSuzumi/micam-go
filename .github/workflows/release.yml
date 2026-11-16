@@ -18,6 +18,11 @@ on:
         required: false
         default: false
         type: boolean
+      draft:
+        description: "把 GitHub Release 建成草稿"
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: write # 需要推送 tag
@@ -174,9 +179,43 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  release:
+    # 把二进制挂到 GitHub Release 上。草稿模式方便先检查产物再点发布。
+    needs: [prepare, binary]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: micam-binaries-${{ needs.prepare.outputs.version }}
+          path: dist
+
+      - name: Create the release and upload the binaries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          DRAFT: ${{ inputs.draft }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG 已存在，只补传资产"
+          else
+            args=(--title "micam $VERSION" --generate-notes)
+            if [ "$DRAFT" = "true" ]; then
+              args+=(--draft)
+              echo "创建草稿 release $TAG"
+            else
+              echo "创建 release $TAG"
+            fi
+            gh release create "$TAG" "${args[@]}"
+          fi
+
+          ls -l dist
+          gh release upload "$TAG" dist/* --clobber
+
   fpk:
     # 复用 fpk 工作流：比跨工作流 dispatch 可靠，不需要额外 token 权限。
-    needs: [prepare, image]
+    # 排在 release 之后，保证 fpk 上传时 release 已经存在。
+    needs: [prepare, image, release]
     if: ${{ inputs.fpk }}
     uses: ./.github/workflows/fpk.yml
     with:
