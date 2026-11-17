@@ -243,9 +243,11 @@ func (s *Server) snapshot(actionErr error) StatusResponse {
 		app.State = status.StateStopped
 		app.FPS = 0
 	} else if readErr != nil {
-		// Running but no status file yet: it is between start and the first write,
-		// or this version does not publish one.
+		// Running but no status file: either it is between start and the first
+		// write, or nothing is publishing one at all. Say which, because the second
+		// case looks identical to a session that never connects.
 		app.State = status.StateConnecting
+		app.Stage = status.Stage("no-status-file")
 	}
 
 	if actionErr != nil {

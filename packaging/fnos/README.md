@@ -7,7 +7,7 @@ Docker。配置表单由 wizard 提供，启动/停止/状态由应用中心管�
 manifest                     应用元数据（key=value）
 ICON.PNG / ICON_256.PNG      应用中心图标（make_icons.py 生成）
 config/privilege             以专用包用户运行（run-as: package）
-config/resource              不声明任何资源（没有 docker-project、没有共享目录）
+config/resource              只声明 data-share：安装时创建 micam-go 共享目录并授权
 wizard/config                「应用设置」里的配置表单
 cmd/main                     start / stop / status，兼看守循环
 cmd/install_* upgrade_* uninstall_* config_*   生命周期脚本
@@ -69,7 +69,8 @@ make fpk ARCHS=arm64     # 只要 ARM 的
 | `target/bin/micam` | 可执行文件（`TRIM_APPDEST`） |
 | `etc/micam.env` | 用户可配置的值，由向导写入（`TRIM_PKGETC`） |
 | `etc/pass_token` | passToken，`0600` |
-| `var/data/credentials.json` | 小米会话缓存（`MICAM_DATA_DIR`） |
+| `<共享目录>/credentials.json` | 小米会话缓存（`MICAM_DATA_DIR`），安装时由 data-share 创建并授权 |
+| `var/status.json` | 界面读的状态文件（`MICAM_STATUS_FILE`），每 2 秒原子重写 |
 | `var/micam.log` | 服务日志，超过 5 MB 换一份 `micam.log.1` |
 | `var/micam.pid` | 看守循环的 pid |
 
@@ -129,3 +130,18 @@ micam 每 2 秒把状态原子重写到 `var/status.json`（先写 `.tmp` 再 re
 
 进程没在跑时，`micam ctl` 会用 pidfile 判断，把状态显示成"已停止"，同时保留最后一条
 错误——这正是"为什么停了"的答案。
+
+## 共享目录与会话缓存
+
+`config/resource` 声明了一个 `data-share`：
+
+```json
+{ "data-share": { "shares": [{ "name": "micam-go" }] } }
+```
+
+安装时飞牛会创建这个共享目录，并把 ACL 授予应用用户；`cmd/main` 通过
+`TRIM_DATA_SHARE_PATHS` 拿到路径，把它作为 `MICAM_DATA_DIR` —— 于是
+`credentials.json`（小米会话缓存）落在文件管理器看得见的地方，备份或迁移直接拷走即可。
+
+拿不到共享目录（旧版本、或平台没给这个变量）时自动退回 `var/data`；迁移逻辑在
+`install_callback` / `upgrade_callback` 里，只在目标为空时复制，不会覆盖后来的登录。

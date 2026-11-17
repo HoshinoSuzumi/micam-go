@@ -292,6 +292,8 @@ docker compose logs | grep -E "direct local session|connecting via"
 - 前端是 **Svelte 5 + Tailwind**（shadcn/ui 的 token 与组件写法），构建产物约
   **34 KB gzip**，由 `make web` 生成，不进仓库；
 - 它和「应用设置」写的是同一份 `etc/micam.env`，两边不会打架；
+- 会话缓存放在安装时自动创建的 `micam-go` 共享目录里（`config/resource` 的 `data-share`），
+  文件管理器里看得见，备份就是拷一个 `credentials.json`；
 - 后端是 `micam ctl`：挂在飞牛网关下的 CGI（`app/ui/index.cgi`），所以**不额外开端口**，
   也自动继承了网关的登录态，不用自己造鉴权；
 - 连接状态、帧数、观众数来自 micam 每 2 秒原子重写的 `var/status.json`；

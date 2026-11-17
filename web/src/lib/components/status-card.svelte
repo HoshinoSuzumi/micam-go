@@ -22,6 +22,7 @@
     dialing: "连接摄像头",
     authenticating: "认证",
     "starting-video": "请求视频",
+    "no-status-file": "没有状态文件（未启用或版本过旧）",
   };
 
   let detail = $derived.by(() => {

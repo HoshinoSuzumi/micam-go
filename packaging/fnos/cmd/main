@@ -49,17 +49,37 @@ load_env() {
     return 0
 }
 
+# data_dir 挑一个可写的位置存会话缓存。
+#
+# 首选「访问权限」里那个共享目录（config/resource 的 data-share），文件管理器里
+# 看得见，备份/迁移都方便；平台没给、或者没权限写，就退回应用数据目录。
+data_dir() {
+    shares="${TRIM_DATA_SHARE_PATHS:-}"
+    for candidate in "${shares%%:*}" "$PKGVAR/data"; do
+        [ -n "$candidate" ] || continue
+        if mkdir -p "$candidate" 2>/dev/null && [ -w "$candidate" ]; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+    printf '%s' "$PKGVAR/data"
+}
+
 prepare_env() {
     export MICAM_BIND=0.0.0.0
     export MICAM_PORT="${TRIM_SERVICE_PORT:-8554}"
     export MICAM_PASS_TOKEN_FILE="$TOKENFILE"
-    export MICAM_DATA_DIR="$PKGVAR/data"
+    # 状态文件是界面唯一的真相来源。忘了这一个，界面就只能显示"连接中"，
+    # 因为 ctl 看不到守护进程在干什么。
+    export MICAM_STATUS_FILE="$PKGVAR/status.json"
+    MICAM_DATA_DIR=$(data_dir)
+    export MICAM_DATA_DIR
 }
 
 configured() {
     [ -n "${MICAM_DID:-}" ] || return 1
     [ -s "$TOKENFILE" ] && return 0
-    [ -f "$PKGVAR/data/credentials.json" ]
+    [ -f "$(data_dir)/credentials.json" ]
 }
 
 pid_of() { cat "$PIDFILE" 2>/dev/null || true; }

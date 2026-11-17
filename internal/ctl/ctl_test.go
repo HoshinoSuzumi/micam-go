@@ -298,3 +298,23 @@ func TestWrongMethodIsRejected(t *testing.T) {
 		t.Fatalf("code = %d, want 405", code)
 	}
 }
+
+// A running process with no status file used to look exactly like a session that
+// never manages to connect. It is a different problem - usually the package not
+// passing --status-file - so it gets its own stage.
+func TestStatusSaysWhenNothingPublishesState(t *testing.T) {
+	server, _ := newTestServer(t)
+
+	if err := os.WriteFile(server.Paths.PIDFile(), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, body := request(t, server, "GET", "/api/status", "")
+	got := decodeStatus(t, body)
+	if !got.App.Running {
+		t.Fatal("expected a running service")
+	}
+	if got.App.State != status.StateConnecting || got.App.Stage != status.Stage("no-status-file") {
+		t.Fatalf("state/stage = %q/%q, want connecting/no-status-file", got.App.State, got.App.Stage)
+	}
+}

@@ -27,6 +27,14 @@ if command -v docker >/dev/null 2>&1; then
     docker rm -f "$APP" >/dev/null 2>&1 || true
 fi
 
+# 会话缓存从 var/data 搬到「访问权限」里的共享目录（config/resource 的 data-share）。
+# 只在目标还没有文件时搬，避免覆盖用户后来登录的那份。
+share=$(printf '%s' "${TRIM_DATA_SHARE_PATHS:-}" | cut -d: -f1)
+if [ -n "$share" ] && [ -f "$PKGVAR/data/credentials.json" ] && [ ! -f "$share/credentials.json" ]; then
+    mkdir -p "$share" 2>/dev/null || true
+    cp -f "$PKGVAR/data/credentials.json" "$share/credentials.json" 2>/dev/null || true
+fi
+
 "$HERE/main" start || true
 
 exit 0
