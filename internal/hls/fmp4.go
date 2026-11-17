@@ -31,12 +31,25 @@ func fullBox(typ string, version byte, flags uint32, parts ...[]byte) []byte {
 	return box(typ, append([][]byte{header}, parts...)...)
 }
 
-// unityMatrix is the identity transform every track declares.
-var unityMatrix = []byte{
-	0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00,
-}
+// unityMatrix is the identity transform every track declares: nine 32-bit
+// fixed-point values, 36 bytes in total.
+//
+// It has to be exactly 36 bytes. Writing 32 makes mvhd 104 bytes instead of 108
+// and tkhd 88 instead of 92 - sizes fixed by the specification. ffmpeg reads
+// those boxes by field offset and copes; Chrome's MP4 parser validates them and
+// rejects the init segment, which then fails every append that follows.
+var unityMatrix = func() []byte {
+	values := [9]uint32{
+		0x00010000, 0, 0,
+		0, 0x00010000, 0,
+		0, 0, 0x40000000,
+	}
+	out := make([]byte, 0, 36)
+	for _, v := range values {
+		out = append(out, u32(v)...)
+	}
+	return out
+}()
 
 // buildInit assembles the initialisation segment: the boxes a player must have
 // before it can decode any fragment. Everything here is constant for the life of
@@ -64,7 +77,7 @@ func buildInit(info spsInfo, ps paramSets) []byte {
 		u32(0), u32(0), // reserved
 		u16(0), u16(0), u16(0), u16(0), // layer, alternate_group, volume, reserved
 		unityMatrix,
-		u32(uint32(info.Width)<<16), u32(uint32(info.Height)<<16),
+		u32(uint32(info.DisplayWidth)<<16), u32(uint32(info.DisplayHeight)<<16),
 	)
 
 	mdhd := fullBox("mdhd", 0, 0,
@@ -156,8 +169,11 @@ func buildHvcC(info spsInfo, ps paramSets) []byte {
 		if len(nal) == 0 {
 			continue
 		}
-		b = append(b, 0x80|byte(nalTypeVPS+i)) // array_completeness | NAL_unit_type
-		b = append(b, u16(1)...)               // numNalus
+		// array_completeness stays 0: the parameter sets also travel in-band, and
+		// claiming the array is complete while they appear elsewhere is a
+		// contradiction a strict demuxer is entitled to reject.
+		b = append(b, byte(nalTypeVPS+i)) // array_completeness | reserved | type
+		b = append(b, u16(1)...)          // numNalus
 		b = append(b, u16(uint16(len(nal)))...)
 		b = append(b, nal...)
 	}

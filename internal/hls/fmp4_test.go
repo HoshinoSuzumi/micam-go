@@ -5,6 +5,48 @@ import (
 	"testing"
 )
 
+// TestInitBoxSizesMatchTheSpec pins the sizes the specification fixes for
+// version 0 boxes.
+//
+// It exists because the matrix was once written as 32 bytes instead of 36, which
+// silently produced a 104-byte mvhd and an 88-byte tkhd. ffmpeg reads those
+// boxes by field offset and never noticed; Chrome validates them and refused the
+// init segment, so every media segment appended afterwards failed.
+func TestInitBoxSizesMatchTheSpec(t *testing.T) {
+	info, err := parseSPS(mustHex(t, spsHex))
+	if err != nil {
+		t.Fatalf("parseSPS: %v", err)
+	}
+	ps := paramSets{
+		vps: mustHex(t, vpsHex),
+		sps: mustHex(t, spsHex),
+		pps: mustHex(t, ppsHex),
+	}
+
+	init := buildInit(info, ps)
+
+	moov := child(init, 0, "moov")
+	if moov == nil {
+		t.Fatal("no moov")
+	}
+	if mvhd := child(moov, 8, "mvhd"); len(mvhd) != 108 {
+		t.Fatalf("mvhd is %d bytes, want 108", len(mvhd))
+	}
+	trak := child(moov, 8, "trak")
+	if trak == nil {
+		t.Fatal("no trak")
+	}
+	if tkhd := child(trak, 8, "tkhd"); len(tkhd) != 92 {
+		t.Fatalf("tkhd is %d bytes, want 92", len(tkhd))
+	}
+
+	// The track section should be byte-identical to what ffmpeg writes for the
+	// same camera, which is the shape browser parsers are tested against.
+	if len(trak) != 546 {
+		t.Fatalf("trak is %d bytes, want 546", len(trak))
+	}
+}
+
 // TestFragmentHasATraf covers the box that was missing once: tfhd, tfdt and trun
 // belong inside a traf, and a moof that lists them directly is malformed.
 //
