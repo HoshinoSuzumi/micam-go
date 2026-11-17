@@ -93,7 +93,7 @@ func TestSegmentIsClosedByTheNextKeyframe(t *testing.T) {
 	}
 
 	// Two seconds of video, allowing for the frame that closed the segment.
-	if d := s.Playlist(); !strings.Contains(string(d), "#EXTINF:2.") {
+	if d := s.Playlist(""); !strings.Contains(string(d), "#EXTINF:2.") {
 		t.Fatalf("playlist does not report roughly two seconds:\n%s", d)
 	}
 }
@@ -118,7 +118,7 @@ func TestWindowSlidesAndForgets(t *testing.T) {
 		t.Fatal("the newest segment is missing")
 	}
 
-	playlist := string(s.Playlist())
+	playlist := string(s.Playlist(""))
 	if !strings.Contains(playlist, "#EXT-X-MEDIA-SEQUENCE:2") {
 		t.Fatalf("playlist does not start at segment 2:\n%s", playlist)
 	}
@@ -130,7 +130,7 @@ func TestPlaylistShape(t *testing.T) {
 	s.Write(accessUnit(t, nalTypeTrailR, 50, false))
 	s.Write(accessUnit(t, nalTypeIDRWRADL, 2000, true))
 
-	playlist := string(s.Playlist())
+	playlist := string(s.Playlist(""))
 	for _, want := range []string{
 		"#EXTM3U",
 		"#EXT-X-VERSION:7",
@@ -142,6 +142,23 @@ func TestPlaylistShape(t *testing.T) {
 		if !strings.Contains(playlist, want) {
 			t.Errorf("playlist has no %q:\n%s", want, playlist)
 		}
+	}
+}
+
+func TestPlaylistURIsAreRelativeToThePlaylist(t *testing.T) {
+	s := New(DefaultWindow)
+	s.Write(accessUnit(t, nalTypeIDRWRADL, 0, true))
+	s.Write(accessUnit(t, nalTypeTrailR, 50, false))
+	s.Write(accessUnit(t, nalTypeIDRWRADL, 2000, true))
+
+	// A playlist at /cam.m3u8 lives in "/", so a bare "init.mp4" would be fetched
+	// from /init.mp4. The base has to carry the directory.
+	playlist := string(s.Playlist("cam/"))
+	if !strings.Contains(playlist, `#EXT-X-MAP:URI="cam/init.mp4"`) {
+		t.Fatalf("init URI is not relative to the playlist:\n%s", playlist)
+	}
+	if !strings.Contains(playlist, "\ncam/seg0.m4s\n") {
+		t.Fatalf("segment URI is not relative to the playlist:\n%s", playlist)
 	}
 }
 

@@ -69,11 +69,11 @@ func TestAgainstACapture(t *testing.T) {
 		t.Fatalf("produced %d segments, want at least 2", got)
 	}
 
-	playlist := seg.Playlist()
+	playlist := seg.Playlist("cam/")
 	if !bytes.HasPrefix(playlist, []byte("#EXTM3U")) {
 		t.Fatalf("playlist does not start with #EXTM3U:\n%s", playlist)
 	}
-	if !bytes.Contains(playlist, []byte("#EXT-X-MAP:URI=\"init.mp4\"")) {
+	if !bytes.Contains(playlist, []byte(`#EXT-X-MAP:URI="cam/init.mp4"`)) {
 		t.Fatalf("playlist has no EXT-X-MAP:\n%s", playlist)
 	}
 
@@ -106,7 +106,13 @@ func dump(dir string, init, playlist []byte, seg *Segmenter) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "init.mp4"), init, 0o644); err != nil {
+	// The segments go in a cam/ subdirectory because that is what the playlist
+	// names: "cam/init.mp4" relative to a playlist sitting one level up.
+	media := filepath.Join(dir, "cam")
+	if err := os.MkdirAll(media, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(media, "init.mp4"), init, 0o644); err != nil {
 		return err
 	}
 	for i := 0; i < seg.Segments(); i++ {
@@ -114,7 +120,7 @@ func dump(dir string, init, playlist []byte, seg *Segmenter) error {
 		if !ok {
 			return fmt.Errorf("segment %d vanished", i)
 		}
-		name := filepath.Join(dir, fmt.Sprintf("seg%d.m4s", i))
+		name := filepath.Join(media, fmt.Sprintf("seg%d.m4s", i))
 		if err := os.WriteFile(name, data, 0o644); err != nil {
 			return err
 		}

@@ -3,6 +3,7 @@ package stream
 import (
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -125,6 +126,75 @@ func TestHLSPlaylistAndSegments(t *testing.T) {
 	if len(seg) < 8 || string(seg[4:8]) != "moof" {
 		t.Fatalf("segment does not start with moof: %x", seg[:min(8, len(seg))])
 	}
+}
+
+func TestHLSPlaylistURIsResolve(t *testing.T) {
+	srv := startHLS(t)
+
+	srv.Publish(hlsFrame(t, 19, 0, true))
+	for i := 1; i <= 10; i++ {
+		srv.Publish(hlsFrame(t, 1, int64(i)*50, false))
+	}
+	srv.Publish(hlsFrame(t, 19, 550, true))
+
+	_, body := get(t, srv, "/cam.m3u8")
+
+	base, err := url.Parse("http://" + srv.Addr() + "/cam.m3u8")
+	if err != nil {
+		t.Fatalf("parse playlist URL: %v", err)
+	}
+
+	uris := playlistURIs(string(body))
+	if len(uris) < 2 {
+		t.Fatalf("playlist names %d media URIs, want at least init and one segment:\n%s", len(uris), body)
+	}
+
+	// This is what a player does: resolve each URI against the playlist's own URL
+	// and fetch it. A URI that only works when the playlist sits at the root would
+	// pass a string comparison but fail here - which is exactly the bug that made
+	// a real player ask for /init.mp4 instead of /cam/init.mp4.
+	for _, raw := range uris {
+		ref, err := url.Parse(raw)
+		if err != nil {
+			t.Fatalf("parse URI %q: %v", raw, err)
+		}
+		resolved := base.ResolveReference(ref)
+
+		resp, err := http.Get(resolved.String())
+		if err != nil {
+			t.Fatalf("GET %s: %v", resolved, err)
+		}
+		_ = resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("playlist points at %s, which answers %d", resolved, resp.StatusCode)
+		}
+	}
+}
+
+// playlistURIs lists the media URIs a player would fetch: the EXT-X-MAP target
+// and every segment line.
+func playlistURIs(playlist string) []string {
+	var uris []string
+	for _, line := range strings.Split(playlist, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "#EXT-X-MAP:") {
+			if _, value, ok := strings.Cut(line, `URI="`); ok {
+				if uri, _, ok := strings.Cut(value, `"`); ok {
+					uris = append(uris, uri)
+				}
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		uris = append(uris, line)
+	}
+	return uris
 }
 
 func TestHLSAbsentSegmentIs404(t *testing.T) {

@@ -328,6 +328,17 @@ func (s *Server) HLSBase() string { return strings.TrimSuffix(s.cfg.Path, ".ts")
 // HLSPlaylistPath is where the media playlist is served.
 func (s *Server) HLSPlaylistPath() string { return s.HLSBase() + ".m3u8" }
 
+// hlsMediaBase is the segment directory as a relative URI, with a trailing
+// slash: the playlist at /cam.m3u8 must name its segments "cam/seg1.m4s", since
+// a bare "seg1.m4s" resolves against / rather than /cam/.
+func (s *Server) hlsMediaBase() string {
+	base := strings.TrimPrefix(s.HLSBase(), "/")
+	if base == "" {
+		return ""
+	}
+	return base + "/"
+}
+
 // HLSURLOf swaps the stream path of one of this server's URLs for the playlist
 // path. The host and port do not change, so it works for any address the caller
 // already knows is reachable.
@@ -342,7 +353,7 @@ func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body := s.seg.Playlist()
+	body := s.seg.Playlist(s.hlsMediaBase())
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)

@@ -266,7 +266,12 @@ func (s *Segmenter) Segment(seq uint64) ([]byte, bool) {
 }
 
 // Playlist renders the media playlist for the current window.
-func (s *Segmenter) Playlist() []byte {
+//
+// base is the directory the segments live in, relative to the playlist itself,
+// and it must not be empty-looking: a playlist at /cam.m3u8 whose entries are
+// "seg3.m4s" tells the player to fetch /seg3.m4s, because relative URIs resolve
+// against the playlist's directory. Passing "cam/" makes them /cam/seg3.m4s.
+func (s *Segmenter) Playlist(base string) []byte {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -283,9 +288,9 @@ func (s *Segmenter) Playlist() []byte {
 	if len(s.ring) > 0 {
 		fmt.Fprintf(&b, "#EXT-X-MEDIA-SEQUENCE:%d\n", s.ring[0].Seq)
 	}
-	b.WriteString("#EXT-X-MAP:URI=\"init.mp4\"\n")
+	fmt.Fprintf(&b, "#EXT-X-MAP:URI=\"%sinit.mp4\"\n", base)
 	for _, seg := range s.ring {
-		fmt.Fprintf(&b, "#EXTINF:%.3f,\nseg%d.m4s\n", seg.Duration.Seconds(), seg.Seq)
+		fmt.Fprintf(&b, "#EXTINF:%.3f,\n%sseg%d.m4s\n", seg.Duration.Seconds(), base, seg.Seq)
 	}
 
 	return b.Bytes()
