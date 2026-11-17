@@ -257,16 +257,26 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 	}
 	defer server.Close()
 
+	rep.Bind(server.Addr())
+
 	if showBanner {
 		fmt.Println()
-		fmt.Printf("  Streaming at:  %s\n", server.URL())
+		fmt.Printf("  Listening on:  %s\n", server.Addr())
+		fmt.Printf("  Local URL:     %s\n", server.URL())
 		fmt.Println()
 		fmt.Printf("    mpv    %s\n", server.URL())
 		fmt.Printf("    vlc    %s\n", server.URL())
 		fmt.Printf("    ffplay %s\n", server.URL())
 		fmt.Println()
 	} else {
-		log.Info("streaming again", "url", server.URL())
+		log.Info("streaming again", "listen", server.Addr(), "url", server.URL())
+	}
+
+	if server.Loopback() {
+		// The single most confusing failure: everything looks healthy, but nothing
+		// outside this machine can reach the stream.
+		log.Warn("the stream listens on loopback only, so nothing outside this machine can open it",
+			"listen", server.Addr(), "hint", "set --bind 0.0.0.0 (the fnOS package already does)")
 	}
 
 	frames := 0

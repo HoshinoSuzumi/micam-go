@@ -7,7 +7,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -80,8 +82,29 @@ func (s *Server) Start() error {
 		}
 	}()
 
-	s.log.Info("streaming", "url", s.URL())
+	// The banner used to say 127.0.0.1 even when bound to 0.0.0.0, which reads like
+	// "local only" when it is not. Log what the kernel actually gave us.
+	s.log.Info("streaming", "listen", s.Addr(), "url", s.URL())
 	return nil
+}
+
+// Addr is the address the server actually bound: the configured port, and the
+// wildcard expanded to the interface it really listens on.
+func (s *Server) Addr() string {
+	if s.listener != nil {
+		return s.listener.Addr().String()
+	}
+	return s.cfg.Addr
+}
+
+// Loopback reports whether the listener is reachable only from this machine.
+func (s *Server) Loopback() bool {
+	addr, err := netip.ParseAddrPort(s.Addr())
+	if err != nil {
+		// Addr is either host:port or [::]:port; fall back to the cheap test.
+		return strings.HasPrefix(s.Addr(), "127.") || strings.HasPrefix(s.Addr(), "[::1]")
+	}
+	return addr.Addr().IsLoopback()
 }
 
 // URL is the address a player should open.

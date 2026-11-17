@@ -33,6 +33,10 @@ type AppStatus struct {
 	Transport string `json:"transport,omitempty"`
 	Codec     string `json:"codec,omitempty"`
 
+	// Bind is where the HTTP server listens; "127.0.0.1:8554" means only this
+	// machine can play the stream.
+	Bind string `json:"bind,omitempty"`
+
 	Frames  int64   `json:"frames"`
 	FPS     float64 `json:"fps"`
 	Viewers int     `json:"viewers"`
@@ -214,6 +218,7 @@ func (s *Server) snapshot(actionErr error) StatusResponse {
 		app.Camera = snap.Camera
 		app.Transport = snap.Transport
 		app.Codec = snap.Codec
+		app.Bind = snap.Bind
 		app.Frames = snap.Frames
 		app.FPS = snap.FPS
 		app.Viewers = snap.Viewers

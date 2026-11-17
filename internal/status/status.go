@@ -42,6 +42,10 @@ type Snapshot struct {
 	Transport string `json:"transport,omitempty"`
 	Codec     string `json:"codec,omitempty"`
 
+	// Bind is the address the HTTP server actually bound, so the UI can tell a
+	// wildcard listener from a loopback-only one.
+	Bind string `json:"bind,omitempty"`
+
 	Frames  int64   `json:"frames"`
 	FPS     float64 `json:"fps"`
 	Viewers int     `json:"viewers"`
@@ -195,8 +199,19 @@ func (r *Reporter) BeginSession(n int) {
 	r.snap.Viewers = 0
 	r.snap.Resyncs = 0
 	r.snap.Since = time.Time{}
+	r.snap.Bind = ""
 	r.frames = 0
 	r.at = r.now()
+}
+
+// Bind records where the stream is being served from.
+func (r *Reporter) Bind(addr string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.snap.Bind = addr
 }
 
 // Connected records how the camera was reached, and when the session started.

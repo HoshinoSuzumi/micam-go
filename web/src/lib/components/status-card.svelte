@@ -12,6 +12,12 @@
     return () => clearInterval(timer);
   });
 
+  // A loopback bind looks healthy from the NAS and is unreachable from anywhere
+  // else: worth saying out loud.
+  let loopback = $derived(
+    !!app.bind && (app.bind.startsWith("127.") || app.bind.startsWith("[::1]")),
+  );
+
   let uptime = $derived(
     app.since ? Math.max(0, (now - new Date(app.since).getTime()) / 1000) : 0,
   );
@@ -25,6 +31,7 @@
     { label: "观看", value: `${app.viewers} 人` },
     { label: "重同步", value: String(app.resyncs) },
     { label: "已运行", value: app.state === "streaming" ? formatDuration(uptime) : "—" },
+    { label: "监听", value: app.bind || "—" },
   ]);
 </script>
 
@@ -47,7 +54,7 @@
   </CardHeader>
 
   <CardContent class="space-y-3">
-    <dl class="grid grid-cols-2 gap-x-6 gap-y-2.5 sm:grid-cols-4">
+    <dl class="grid grid-cols-2 gap-x-6 gap-y-2.5 sm:grid-cols-3 lg:grid-cols-4">
       {#each rows as row (row.label)}
         <div class="min-w-0">
           <dt class="text-[11px] tracking-wide text-muted-foreground uppercase">
@@ -57,6 +64,17 @@
         </div>
       {/each}
     </dl>
+
+    {#if loopback}
+      <p
+        class="rounded-md border border-amber-500/30 bg-amber-500/8 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
+      >
+        流只监听在本机（{app.bind}），局域网和 Tailscale 都打不开。
+        fnOS 包里由 <code class="font-mono">cmd/main</code> 设成 <code class="font-mono"
+          >0.0.0.0</code
+        >；手动运行时加 <code class="font-mono">--bind 0.0.0.0</code>。
+      </p>
+    {/if}
 
     {#if app.error}
       <p class="rounded-md border border-destructive/30 bg-destructive/8 px-3 py-2 font-mono text-xs break-words text-destructive">

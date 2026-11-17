@@ -303,6 +303,43 @@ docker compose logs | grep -E "direct local session|connecting via"
 | `POST api/config` | 校验并写入配置，然后按新参数重启服务 |
 | `POST api/control` | `start` / `stop` / `restart`，统一走 `cmd/main` |
 
+### 从外面看（局域网 / Tailscale）
+
+流是普通 HTTP，地址就是 `http://<NAS 地址>:8554/cam.ts`。能打开的前提只有一个：micam
+监听在**非 loopback** 的地址上。fnOS 包里 `cmd/main` 会设 `MICAM_BIND=0.0.0.0`，界面
+「连接状态」里的**监听**一行显示的是内核实际绑定的地址——如果那行是 `127.0.0.1:8554`，
+就只有 NAS 自己能打开，局域网和 Tailscale 都不行（这时界面会直接标黄）。
+
+打不开时先分清是谁在报错，`curl` 比浏览器诚实：
+
+| 现象 | 说明 |
+|---|---|
+| `200` 然后一直吐二进制 | 正常 |
+| `502 Bad Gateway` | **链路上有一个 HTTP 代理**（tailscale serve、nginx、飞牛网关…），它连不上后端 |
+| `Connection refused` | 这个地址端口上没有进程在听 |
+| 一直卡住直到超时 | 防火墙或 Tailscale ACL 把包丢了 |
+
+502 最容易误判，因为 micam 从不产生 502：它要么 200 开始推流，要么直接被拒绝。三步定位：
+
+```sh
+# 1) 谁在监听 8554。可能不止一个：0.0.0.0 和某个具体 IP 可以同时存在
+sudo ss -ltnp | grep 8554
+
+# 2) 在 NAS 本机上分别打两个地址，绕开客户端
+curl -sI --max-time 3 http://127.0.0.1:8554/cam.ts
+curl -sI --max-time 3 "http://$(tailscale ip -4 | head -1):8554/cam.ts"
+
+# 3) tailscale 有没有在这个端口上做 serve / funnel
+tailscale serve status
+tailscale funnel status
+```
+
+第 2 步在本机返回 200、外部仍然 502，问题就在 NAS 之外（客户端代理、出口节点），
+和 micam 无关。反过来，本机也 502，说明那个 IP:端口 上答话的不是 micam——`ss` 的输出
+会直接告诉你是谁。
+
+防火墙要在 fnOS 的「安全」里放行 8554（或对应的自定义端口），否则外部表现为超时。
+
 ### 打包成 fnOS 应用（fpk）
 
 `packaging/fnos/` 是一套按飞牛规范写的应用包，**直接跑静态二进制，不用 Docker**：

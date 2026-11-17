@@ -20,6 +20,8 @@ export interface AppStatus {
   camera?: string;
   transport?: string;
   codec?: string;
+  /** bind is where the HTTP stream listens; a 127.x address is local-only. */
+  bind?: string;
   frames: number;
   fps: number;
   viewers: number;

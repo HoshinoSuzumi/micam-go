@@ -4,6 +4,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -210,4 +211,37 @@ func TestViewerCountReturnsToZero(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("viewers = %d after the player disconnected", server.Viewers())
+}
+
+// The banner and the UI must report the address the kernel actually bound, not the
+// configured one: "0.0.0.0" printed as "127.0.0.1" reads like "local only", and the
+// reverse mistake ("127.0.0.1" reported as reachable) hides every remote failure.
+func TestServerReportsWhatItBound(t *testing.T) {
+	server := New(Config{Addr: "127.0.0.1:0", Path: "/cam.ts"}, testLogger())
+	if err := server.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer server.Close()
+
+	if got := server.Addr(); !strings.HasPrefix(got, "127.0.0.1:") {
+		t.Fatalf("Addr() = %q, want the bound loopback address", got)
+	}
+	if !server.Loopback() {
+		t.Fatal("a 127.0.0.1 listener must be reported as loopback")
+	}
+}
+
+func TestServerWildcardIsReachable(t *testing.T) {
+	server := New(Config{Addr: "0.0.0.0:0", Path: "/cam.ts"}, testLogger())
+	if err := server.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer server.Close()
+
+	if server.Loopback() {
+		t.Fatalf("0.0.0.0 must not be reported as loopback (bound %q)", server.Addr())
+	}
+	if strings.HasPrefix(server.Addr(), "127.") {
+		t.Fatalf("Addr() = %q, want the wildcard the kernel bound", server.Addr())
+	}
 }
