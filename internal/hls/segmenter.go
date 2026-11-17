@@ -11,7 +11,9 @@ package hls
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
@@ -33,8 +35,27 @@ const (
 // Segment is one encoded fragment and how long it plays.
 type Segment struct {
 	Seq      uint64
+	Name     string
 	Data     []byte
 	Duration time.Duration
+}
+
+// segmentName is the content address of a fragment.
+//
+// Names have to be unique per payload rather than per position: segment numbers
+// restart at zero on every reconnect, so "seg3.m4s" means different bytes in
+// different sessions, and anything between us and the player that caches by name
+// would happily hand over the wrong one.
+func segmentName(data []byte) string {
+	sum := sha256.Sum256(data)
+	return "seg" + hex.EncodeToString(sum[:8]) + ".m4s"
+}
+
+// initFileName is the content address of the initialisation segment, for the same
+// reason: it is rebuilt whenever the parameter sets change.
+func initFileName(data []byte) string {
+	sum := sha256.Sum256(data)
+	return "init-" + hex.EncodeToString(sum[:6]) + ".mp4"
 }
 
 // Segmenter turns frames into a sliding window of fMP4 segments.
@@ -45,11 +66,12 @@ type Segmenter struct {
 	mu     sync.RWMutex
 	window int
 
-	clock  ts.Clock
-	params paramSets
-	info   spsInfo
-	hasSPS bool
-	init   []byte
+	clock    ts.Clock
+	params   paramSets
+	info     spsInfo
+	hasSPS   bool
+	init     []byte
+	initName string
 
 	seq      uint64
 	ring     []*Segment
@@ -117,6 +139,7 @@ func (s *Segmenter) Write(p miss.Packet) error {
 			s.info = info
 			s.hasSPS = true
 			s.init = nil // rebuild from the new parameter sets
+			s.initName = ""
 		}
 	}
 
@@ -141,6 +164,7 @@ func (s *Segmenter) Write(p miss.Packet) error {
 		}
 		s.started = true
 		s.init = buildInit(s.info, s.params)
+		s.initName = initFileName(s.init)
 	}
 
 	s.pending = append(s.pending, fragmentSample{data: sample, key: key})
@@ -210,9 +234,12 @@ func (s *Segmenter) flush(endMS int64) {
 		total += s.pending[i].duration
 	}
 
+	data := buildFragment(uint32(s.seq+1), s.mediaT, s.pending)
+
 	seg := &Segment{
 		Seq:      s.seq,
-		Data:     buildFragment(uint32(s.seq+1), s.mediaT, s.pending),
+		Name:     segmentName(data),
+		Data:     data,
 		Duration: time.Duration(int64(total) * int64(time.Second) / mp4Timescale),
 	}
 
@@ -265,6 +292,34 @@ func (s *Segmenter) Segment(seq uint64) ([]byte, bool) {
 	return nil, false
 }
 
+// Media returns whatever a playlist URI names: the init segment or a fragment.
+//
+// One lookup for both because the names are content addresses either way, and a
+// caller serving a URI should not have to know which kind it is holding.
+func (s *Segmenter) Media(name string) ([]byte, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if name != "" && name == s.initName {
+		return s.init, true
+	}
+	for _, seg := range s.ring {
+		if seg.Name == name {
+			return seg.Data, true
+		}
+	}
+	return nil, false
+}
+
+// InitName is the file name of the current initialisation segment.
+func (s *Segmenter) InitName() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.init == nil {
+		return ""
+	}
+	return s.initName
+}
+
 // Playlist renders the media playlist for the current window.
 //
 // base is the directory the segments live in, relative to the playlist itself,
@@ -288,9 +343,11 @@ func (s *Segmenter) Playlist(base string) []byte {
 	if len(s.ring) > 0 {
 		fmt.Fprintf(&b, "#EXT-X-MEDIA-SEQUENCE:%d\n", s.ring[0].Seq)
 	}
-	fmt.Fprintf(&b, "#EXT-X-MAP:URI=\"%sinit.mp4\"\n", base)
+	if s.initName != "" {
+		fmt.Fprintf(&b, "#EXT-X-MAP:URI=\"%s%s\"\n", base, s.initName)
+	}
 	for _, seg := range s.ring {
-		fmt.Fprintf(&b, "#EXTINF:%.3f,\n%sseg%d.m4s\n", seg.Duration.Seconds(), base, seg.Seq)
+		fmt.Fprintf(&b, "#EXTINF:%.3f,\n%s%s\n", seg.Duration.Seconds(), base, seg.Name)
 	}
 
 	return b.Bytes()

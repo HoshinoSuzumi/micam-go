@@ -73,7 +73,7 @@ func TestAgainstACapture(t *testing.T) {
 	if !bytes.HasPrefix(playlist, []byte("#EXTM3U")) {
 		t.Fatalf("playlist does not start with #EXTM3U:\n%s", playlist)
 	}
-	if !bytes.Contains(playlist, []byte(`#EXT-X-MAP:URI="cam/init.mp4"`)) {
+	if !bytes.Contains(playlist, []byte(`#EXT-X-MAP:URI="cam/init-`)) {
 		t.Fatalf("playlist has no EXT-X-MAP:\n%s", playlist)
 	}
 
@@ -90,7 +90,7 @@ func TestAgainstACapture(t *testing.T) {
 	}
 
 	if out := os.Getenv("MICAM_HEVC_OUT"); out != "" {
-		if err := dump(out, init, playlist, seg); err != nil {
+		if err := dump(out, playlist, seg); err != nil {
 			t.Fatalf("dump: %v", err)
 		}
 		if err := writeVODPlaylist(out, playlist); err != nil {
@@ -100,32 +100,55 @@ func TestAgainstACapture(t *testing.T) {
 	}
 }
 
-// dump writes the playlist, init and segments in the layout the HTTP handlers
-// serve, so ffprobe can be pointed at the directory.
-func dump(dir string, init, playlist []byte, seg *Segmenter) error {
+// dump writes exactly the files the playlist names, in the layout the HTTP
+// handlers serve, so ffprobe can be pointed at the directory.
+func dump(dir string, playlist []byte, seg *Segmenter) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	// The segments go in a cam/ subdirectory because that is what the playlist
-	// names: "cam/init.mp4" relative to a playlist sitting one level up.
+	// Media lives in a cam/ subdirectory because that is what the playlist says:
+	// "cam/init-....mp4" relative to a playlist sitting one level up.
 	media := filepath.Join(dir, "cam")
 	if err := os.MkdirAll(media, 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(media, "init.mp4"), init, 0o644); err != nil {
-		return err
-	}
-	for i := 0; i < seg.Segments(); i++ {
-		data, ok := seg.Segment(uint64(i))
+
+	for _, uri := range playlistMediaURIs(playlist) {
+		name := uri[strings.LastIndex(uri, "/")+1:]
+		data, ok := seg.Media(name)
 		if !ok {
-			return fmt.Errorf("segment %d vanished", i)
+			return fmt.Errorf("%s is named by the playlist but unavailable", name)
 		}
-		name := filepath.Join(media, fmt.Sprintf("seg%d.m4s", i))
-		if err := os.WriteFile(name, data, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(media, name), data, 0o644); err != nil {
 			return err
 		}
 	}
+
 	return os.WriteFile(filepath.Join(dir, "index.m3u8"), playlist, 0o644)
+}
+
+// playlistMediaURIs lists the media a player would fetch: the EXT-X-MAP target
+// and every segment line.
+func playlistMediaURIs(playlist []byte) []string {
+	var uris []string
+	for _, line := range strings.Split(string(playlist), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "#EXT-X-MAP:") {
+			if _, rest, ok := strings.Cut(line, `URI="`); ok {
+				if uri, _, ok := strings.Cut(rest, `"`); ok {
+					uris = append(uris, uri)
+				}
+			}
+			continue
+		}
+		if !strings.HasPrefix(line, "#") {
+			uris = append(uris, line)
+		}
+	}
+	return uris
 }
 
 // writeVODPlaylist appends ENDLIST so offline tools stop instead of waiting for

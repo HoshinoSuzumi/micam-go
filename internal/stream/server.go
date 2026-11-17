@@ -373,28 +373,10 @@ func (s *Server) handleHLSFile(w http.ResponseWriter, r *http.Request) {
 
 	name := strings.TrimPrefix(r.URL.Path, s.HLSBase()+"/")
 
-	if name == "init.mp4" {
-		body, ok := s.seg.Init()
-		if !ok {
-			http.Error(w, "the stream has not produced a decodable keyframe yet", http.StatusNotFound)
-			return
-		}
-		writeMP4(w, r, body)
-		return
-	}
-
-	if !strings.HasPrefix(name, "seg") || !strings.HasSuffix(name, ".m4s") {
-		http.NotFound(w, r)
-		return
-	}
-
-	seq, err := strconv.ParseUint(strings.TrimSuffix(strings.TrimPrefix(name, "seg"), ".m4s"), 10, 64)
-	if err != nil {
-		http.Error(w, "segment names look like seg<number>.m4s", http.StatusBadRequest)
-		return
-	}
-
-	body, ok := s.seg.Segment(seq)
+	// Names are content addresses, so the init segment is addressed like the
+	// media segments rather than living at a fixed /init.mp4 that could go stale
+	// when the parameter sets change.
+	body, ok := s.seg.Media(name)
 	if !ok {
 		// Normal: the playlist was fetched before the window slid, or the player
 		// is asking for a segment that has already been recycled.

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -112,7 +113,14 @@ func TestHLSPlaylistAndSegments(t *testing.T) {
 		t.Fatalf("playlist body:\n%s", body)
 	}
 
-	resp, init := get(t, srv, "/cam/init.mp4")
+	// Media names are content addresses, so they are read from the playlist
+	// rather than assumed.
+	uris := playlistURIs(string(body))
+	if len(uris) < 2 {
+		t.Fatalf("playlist names %d media URIs, want at least init and one segment:\n%s", len(uris), body)
+	}
+
+	resp, init := get(t, srv, "/"+uris[0])
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("init returned %d", resp.StatusCode)
 	}
@@ -120,7 +128,7 @@ func TestHLSPlaylistAndSegments(t *testing.T) {
 		t.Fatal("init segment has no hvcC record")
 	}
 
-	resp, seg := get(t, srv, "/cam/seg0.m4s")
+	resp, seg := get(t, srv, "/"+uris[1])
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("segment returned %d", resp.StatusCode)
 	}
@@ -199,20 +207,46 @@ func playlistURIs(playlist string) []string {
 	return uris
 }
 
-func TestHLSAbsentSegmentIs404(t *testing.T) {
+func TestHLSUnknownNameIs404(t *testing.T) {
 	srv := startHLS(t)
 	srv.Publish(hlsFrame(t, 19, 0, true))
 	srv.Publish(hlsFrame(t, 1, 50, false))
 	srv.Publish(hlsFrame(t, 19, 100, true))
 
-	resp, _ := get(t, srv, "/cam/seg99.m4s")
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("missing segment returned %d, want 404", resp.StatusCode)
+	// A name that has slid out of the window, a malformed one, and one from an
+	// earlier session all mean the same thing now that names are content
+	// addresses: we do not have it.
+	for _, name := range []string{"/cam/seg99.m4s", "/cam/seg-abc.m4s", "/cam/init.mp4", "/cam/nonsense"} {
+		resp, _ := get(t, srv, name)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("%s returned %d, want 404", name, resp.StatusCode)
+		}
+	}
+}
+
+func TestHLSSegmentNameIsAContentAddress(t *testing.T) {
+	srv := startHLS(t)
+
+	srv.Publish(hlsFrame(t, 19, 0, true))
+	srv.Publish(hlsFrame(t, 1, 50, false))
+	srv.Publish(hlsFrame(t, 19, 100, true))
+
+	_, body := get(t, srv, "/cam.m3u8")
+	uris := playlistURIs(string(body))
+	if len(uris) < 2 {
+		t.Fatalf("playlist names %d URIs:\n%s", len(uris), body)
 	}
 
-	resp, _ = get(t, srv, "/cam/seg-abc.m4s")
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("malformed name returned %d, want 400", resp.StatusCode)
+	// Nothing may be named after a position: numbers restart at zero on every
+	// reconnect, and a cached "seg3.m4s" would then be a different video.
+	for _, uri := range uris {
+		base := uri[strings.LastIndex(uri, "/")+1:]
+		if !strings.HasPrefix(base, "seg") && !strings.HasPrefix(base, "init-") {
+			t.Fatalf("URI %q is not content addressed", uri)
+		}
+		if regexp.MustCompile(`^seg\d+\.m4s$`).MatchString(base) {
+			t.Fatalf("URI %q still looks positional", uri)
+		}
 	}
 }
 

@@ -2,6 +2,7 @@ package hls
 
 import (
 	"bytes"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -142,9 +143,9 @@ func TestPlaylistShape(t *testing.T) {
 		"#EXTM3U",
 		"#EXT-X-VERSION:7",
 		"#EXT-X-TARGETDURATION:",
-		"#EXT-X-MAP:URI=\"init.mp4\"",
+		"#EXT-X-MAP:URI=\"init-",
 		"#EXTINF:",
-		"seg0.m4s",
+		"#EXTINF:",
 	} {
 		if !strings.Contains(playlist, want) {
 			t.Errorf("playlist has no %q:\n%s", want, playlist)
@@ -161,10 +162,10 @@ func TestPlaylistURIsAreRelativeToThePlaylist(t *testing.T) {
 	// A playlist at /cam.m3u8 lives in "/", so a bare "init.mp4" would be fetched
 	// from /init.mp4. The base has to carry the directory.
 	playlist := string(s.Playlist("cam/"))
-	if !strings.Contains(playlist, `#EXT-X-MAP:URI="cam/init.mp4"`) {
+	if !strings.Contains(playlist, `#EXT-X-MAP:URI="cam/init-`) {
 		t.Fatalf("init URI is not relative to the playlist:\n%s", playlist)
 	}
-	if !strings.Contains(playlist, "\ncam/seg0.m4s\n") {
+	if !regexp.MustCompile(`(?m)^cam/seg[0-9a-f]{16}\.m4s$`).MatchString(playlist) {
 		t.Fatalf("segment URI is not relative to the playlist:\n%s", playlist)
 	}
 }
