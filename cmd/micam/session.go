@@ -254,6 +254,8 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 		Addr:      addr,
 		Path:      "/cam.ts",
 		PTSLeadMS: opts.PTSLeadMS,
+		HLS:       opts.HLS,
+		HLSWindow: opts.HLSWindow,
 	}, log)
 	if err := server.Start(); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "in use") {
@@ -271,6 +273,19 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 		endpoints = append(endpoints, status.StreamURL{URL: u.URL, Iface: u.Iface})
 	}
 	rep.Bind(server.Addr(), endpoints)
+
+	// The playlist a Safari or iOS player needs. It is a different endpoint, not
+	// a different address, so it is derived from the same list.
+	if opts.HLS {
+		hls := make([]status.StreamURL, 0, len(reachable)+1)
+		for _, u := range reachable {
+			hls = append(hls, status.StreamURL{URL: server.HLSURLOf(u.URL), Iface: u.Iface})
+		}
+		if len(hls) == 0 {
+			hls = append(hls, status.StreamURL{URL: server.HLSURLOf(server.URL())})
+		}
+		rep.BindHLS(hls)
+	}
 
 	if showBanner {
 		fmt.Println()
@@ -295,6 +310,16 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 		fmt.Printf("    mpv    %s\n", player)
 		fmt.Printf("    vlc    %s\n", player)
 		fmt.Printf("    ffplay %s\n", player)
+
+		if opts.HLS {
+			fmt.Println()
+			fmt.Printf("  HLS (Safari / iOS):\n")
+			if len(reachable) > 0 {
+				fmt.Printf("    %s\n", server.HLSURLOf(reachable[0].URL))
+			} else {
+				fmt.Printf("    %s\n", server.HLSURLOf(server.URL()))
+			}
+		}
 		fmt.Println()
 	} else {
 		log.Info("streaming again", "listen", server.Addr(), "url", server.URL())

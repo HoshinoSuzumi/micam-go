@@ -68,6 +68,9 @@ type Snapshot struct {
 	// URLs are the addresses another machine can use to play the stream, one per
 	// interface. The UI lets the user pick one instead of guessing.
 	URLs []StreamURL `json:"urls,omitempty"`
+	// HLS are the same addresses, pointing at the playlist instead. Safari and
+	// iOS can only play this one, so it is listed separately.
+	HLS []StreamURL `json:"hls,omitempty"`
 
 	Frames  int64   `json:"frames"`
 	FPS     float64 `json:"fps"`
@@ -241,6 +244,16 @@ func (r *Reporter) Bind(addr string, urls []StreamURL) {
 	defer r.mu.Unlock()
 	r.snap.Bind = addr
 	r.snap.URLs = urls
+}
+
+// BindHLS records the playlist addresses, when HLS is served.
+func (r *Reporter) BindHLS(urls []StreamURL) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.snap.HLS = urls
 }
 
 // Stage records what the current attempt is doing.

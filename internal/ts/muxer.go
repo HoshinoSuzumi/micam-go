@@ -62,9 +62,7 @@ type Muxer struct {
 	pmtCounter   byte
 	videoCounter byte
 
-	clockStarted bool
-	previousMS   int64
-	elapsedMS    int64
+	clock Clock
 
 	ptsOffset int64
 
@@ -131,23 +129,7 @@ func (m *Muxer) Flush() error {
 // requires monotonic timestamps, so plausible deltas are trusted and anything
 // else falls back to the nominal frame interval.
 func (m *Muxer) advanceClock(timestampMS int64) int64 {
-	if !m.clockStarted {
-		// A flag rather than a negative sentinel: cameras have been seen
-		// reporting negative values, and a sentinel would read as "not started"
-		// forever, freezing the clock.
-		m.clockStarted = true
-		m.previousMS = timestampMS
-		return m.elapsedMS
-	}
-
-	delta := timestampMS - m.previousMS
-	m.previousMS = timestampMS
-	if delta > 0 && delta <= maxPlausibleGapMS {
-		m.elapsedMS += delta
-	} else {
-		m.elapsedMS += nominalFrameMS
-	}
-	return m.elapsedMS
+	return m.clock.Advance(timestampMS)
 }
 
 // ---------------------------------------------------------------- tables ---

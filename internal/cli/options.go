@@ -42,6 +42,11 @@ type Options struct {
 	Port      int
 	Quality   int
 	PTSLeadMS int
+	// HLS serves a playlist next to the MPEG-TS stream: Safari and iOS cannot
+	// play MPEG-TS at all.
+	HLS bool
+	// HLSWindow is how many segments the playlist keeps.
+	HLSWindow int
 
 	ConnectTimeout time.Duration
 	Relogin        bool
@@ -98,6 +103,10 @@ func Parse(args []string) (*Options, error) {
 		"0 auto, 1 sd, 2 hd, 3 full; newer cameras may accept 4-5")
 	fs.IntVar(&opts.PTSLeadMS, "pts-lead", envIntOr("MICAM_PTS_LEAD", 100),
 		"presentation lead in ms: lower is snappier, higher is kinder to software decoders")
+	fs.BoolVar(&opts.HLS, "hls", envBoolOr("MICAM_HLS", true),
+		"also serve /cam.m3u8 for Safari and iOS")
+	fs.IntVar(&opts.HLSWindow, "hls-window", envIntOr("MICAM_HLS_WINDOW", 6),
+		"segments kept in the playlist: more is steadier, fewer is lower latency")
 	fs.IntVar(&timeoutSeconds, "connect-timeout", 90,
 		"seconds to keep retrying the relay handshake")
 	fs.BoolVar(&opts.Relogin, "relogin", false, "discard the cached session and log in again")

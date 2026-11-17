@@ -8,6 +8,7 @@ MISS 会话后解密媒体，原样复用成 TS 输出。协议层是
 
 - 单个静态二进制，`CGO_ENABLED=0`，`linux/arm64` 与 `amd64` 都直接交叉编译
 - 不转码：CPU 只花在解密和 TS 复用上，输出码率等于摄像头码率
+- 两种输出：`/cam.ts` 给 mpv / VLC / ffmpeg，`/cam.m3u8` 给 Safari 和 iOS
 - 优先局域网直连，失败自动回落中继
 - 断流按连续失败计数重连；云接口不可达时不退出、也不占重试额度
 - fnOS 应用包自带管理界面：配置、启停、连接状态、运行日志
@@ -149,6 +150,8 @@ make fpk                        # 出 amd64 与 arm64 两个包
 | `--port` | `8554` | HTTP 端口 |
 | `--quality` | `2` | 0 auto / 1 SD / 2 HD / 3 full；协议支持到 5，新机型常把全分辨率放在 3 |
 | `--pts-lead` | `100` | 画面提前量（毫秒），越小越跟手 |
+| `--hls` | 开 | 同时提供 `/cam.m3u8`，Safari 和 iOS 只能播这个 |
+| `--hls-window` | `6` | 播放列表保留几个分片；越多越抗抖动，越少延迟越低 |
 | `--lan` | `prefer` | `prefer` 先试直连再回落；`only` 只用直连；`off` 只用中继 |
 | `--reconnect` | `0` | 连续断流后的重连次数；`0` 交给编排层重启 |
 | `--data-dir` | `~/.micam` | `credentials.json` 所在目录 |

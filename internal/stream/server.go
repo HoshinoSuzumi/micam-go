@@ -13,8 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"micam/internal/hls"
 	"micam/internal/miss"
-	"micam/internal/ts"
+	"micam/internal/sink"
 )
 
 const (
@@ -32,17 +33,27 @@ type Config struct {
 	// PTSLeadMS is how far presentation runs ahead of the transport clock. It is
 	// the largest tunable source of latency in the pipeline.
 	PTSLeadMS int
+	// Sink builds the format written to each viewer. Nil means MPEG-TS.
+	Sink sink.Factory
+	// HLS additionally serves /cam.m3u8 next to /cam.ts. Both outputs are fed
+	// from the same frames.
+	HLS bool
+	// HLSWindow is how many segments the playlist keeps. Zero means the default.
+	HLSWindow int
 }
 
 // Server fans one stream out to any number of HTTP viewers.
 //
-// Each viewer gets its own muxer and its own bounded queue, so a slow player has
+// Each viewer gets its own sink and its own bounded queue, so a slow player has
 // frames dropped rather than being allowed to stall the camera reader.
 type Server struct {
 	cfg      Config
 	log      *slog.Logger
 	listener net.Listener
 	http     *http.Server
+
+	// seg is the single HLS segmenter, shared by every HLS viewer.
+	seg *hls.Segmenter
 
 	mu      sync.RWMutex
 	viewers map[*viewer]struct{}
@@ -70,6 +81,14 @@ func (s *Server) Start() error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(s.cfg.Path, s.handle)
+
+	if s.cfg.HLS {
+		s.seg = hls.New(s.cfg.HLSWindow)
+		mux.HandleFunc(s.HLSPlaylistPath(), s.handlePlaylist)
+		// A trailing slash is required: patterns without one match exactly in
+		// Go 1.22's mux, so "/cam/seg" would never see "/cam/seg0.m4s".
+		mux.HandleFunc(s.HLSBase()+"/", s.handleHLSFile)
+	}
 
 	s.http = &http.Server{
 		Handler: mux,
@@ -217,7 +236,8 @@ func (s *Server) Resyncs() int {
 	return total
 }
 
-// Publish offers a frame to every viewer. It never blocks.
+// Publish offers a frame to every viewer and to the HLS segmenter. It never
+// blocks.
 func (s *Server) Publish(p miss.Packet) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -226,6 +246,10 @@ func (s *Server) Publish(p miss.Packet) {
 	}
 	for v := range s.viewers {
 		v.offer(p)
+	}
+
+	if s.seg != nil {
+		_ = s.seg.Write(p)
 	}
 }
 
@@ -277,10 +301,15 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
+	factory := s.cfg.Sink
+	if factory == nil {
+		factory = sink.TS(s.cfg.PTSLeadMS)
+	}
+
 	v := &viewer{
-		frames:    make(chan miss.Packet, queueDepth),
-		ptsLeadMS: s.cfg.PTSLeadMS,
-		log:       s.log,
+		frames:  make(chan miss.Packet, queueDepth),
+		newSink: factory,
+		log:     s.log,
 	}
 	s.add(v)
 	s.log.Info("viewer connected", "from", r.RemoteAddr, "total", s.Viewers())
@@ -290,6 +319,88 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	v.pump(w, flusher)
+}
+
+// HLSBase is the URL prefix shared by the HLS endpoints: the TS path without its
+// extension, so /cam.ts implies /cam.m3u8 and /cam/.
+func (s *Server) HLSBase() string { return strings.TrimSuffix(s.cfg.Path, ".ts") }
+
+// HLSPlaylistPath is where the media playlist is served.
+func (s *Server) HLSPlaylistPath() string { return s.HLSBase() + ".m3u8" }
+
+// HLSURLOf swaps the stream path of one of this server's URLs for the playlist
+// path. The host and port do not change, so it works for any address the caller
+// already knows is reachable.
+func (s *Server) HLSURLOf(streamURL string) string {
+	return strings.TrimSuffix(streamURL, s.cfg.Path) + s.HLSPlaylistPath()
+}
+
+func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	body := s.seg.Playlist()
+	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodGet {
+		_, _ = w.Write(body)
+	}
+}
+
+// handleHLSFile serves the init segment and the media segments, which share the
+// /cam/ prefix.
+func (s *Server) handleHLSFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	name := strings.TrimPrefix(r.URL.Path, s.HLSBase()+"/")
+
+	if name == "init.mp4" {
+		body, ok := s.seg.Init()
+		if !ok {
+			http.Error(w, "the stream has not produced a decodable keyframe yet", http.StatusNotFound)
+			return
+		}
+		writeMP4(w, r, body)
+		return
+	}
+
+	if !strings.HasPrefix(name, "seg") || !strings.HasSuffix(name, ".m4s") {
+		http.NotFound(w, r)
+		return
+	}
+
+	seq, err := strconv.ParseUint(strings.TrimSuffix(strings.TrimPrefix(name, "seg"), ".m4s"), 10, 64)
+	if err != nil {
+		http.Error(w, "segment names look like seg<number>.m4s", http.StatusBadRequest)
+		return
+	}
+
+	body, ok := s.seg.Segment(seq)
+	if !ok {
+		// Normal: the playlist was fetched before the window slid, or the player
+		// is asking for a segment that has already been recycled.
+		http.Error(w, "segment is outside the window", http.StatusNotFound)
+		return
+	}
+
+	writeMP4(w, r, body)
+}
+
+func writeMP4(w http.ResponseWriter, r *http.Request, body []byte) {
+	w.Header().Set("Content-Type", "video/mp4")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodGet {
+		_, _ = w.Write(body)
+	}
 }
 
 func (s *Server) add(v *viewer) {
@@ -313,11 +424,12 @@ func (s *Server) remove(v *viewer) {
 
 // viewer is one connected player.
 type viewer struct {
-	frames    chan miss.Packet
-	started   bool
-	ptsLeadMS int
-	resyncs   int
-	log       *slog.Logger
+	frames  chan miss.Packet
+	started bool
+	resyncs int
+	log     *slog.Logger
+	// newSink builds this viewer's wire format once the codec is known.
+	newSink sink.Factory
 }
 
 // offer queues a frame, starting only at a keyframe: a viewer that joins
@@ -371,7 +483,12 @@ func (v *viewer) discardBacklog() {
 }
 
 func (v *viewer) pump(w io.Writer, flusher http.Flusher) {
-	var muxer *ts.Muxer
+	var out sink.Sink
+	defer func() {
+		if out != nil {
+			_ = out.Close()
+		}
+	}()
 
 	timeout := time.NewTimer(viewerTimeout)
 	defer timeout.Stop()
@@ -382,10 +499,10 @@ func (v *viewer) pump(w io.Writer, flusher http.Flusher) {
 			if !ok {
 				return
 			}
-			if muxer == nil {
-				muxer = ts.NewMuxerWithLead(w, p.Codec, v.ptsLeadMS)
+			if out == nil {
+				out = v.newSink(w, p.Codec)
 			}
-			if err := muxer.Write(p); err != nil {
+			if err := out.Write(p); err != nil {
 				return // normal: the player disconnected
 			}
 			flusher.Flush()
