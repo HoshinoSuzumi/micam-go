@@ -20,6 +20,12 @@ type spsInfo struct {
 	BitDepthChroma uint8
 	Width          uint16
 	Height         uint16
+	// DisplayWidth and DisplayHeight are Width/Height minus the conformance
+	// window: the sizes a player shows. ffmpeg writes these into the sample
+	// entry, and matching it keeps our output byte-comparable with the files
+	// browsers are tested against.
+	DisplayWidth  uint16
+	DisplayHeight uint16
 }
 
 // bitReader reads fields out of a NAL unit, most significant bit first.
@@ -228,13 +234,33 @@ func parseSPS(nal []byte) (spsInfo, error) {
 	if err != nil {
 		return info, err
 	}
+
+	var marginWidth, marginHeight uint64
 	if conformance == 1 {
-		for i := 0; i < 4; i++ { // left, right, top, bottom offsets
-			if _, err := r.ue(); err != nil {
+		offsets := make([]uint64, 4) // left, right, top, bottom
+		for i := 0; i < 4; i++ {
+			value, err := r.ue()
+			if err != nil {
 				return info, err
 			}
+			offsets[i] = value
 		}
+
+		// The offsets count chroma samples, so they scale with the chroma format:
+		// 4:2:0 halves both, 4:2:2 halves width only.
+		subW, subH := uint64(1), uint64(1)
+		switch info.ChromaFormat {
+		case 1:
+			subW, subH = 2, 2
+		case 2:
+			subW, subH = 2, 1
+		}
+		marginWidth = (offsets[0] + offsets[1]) * subW
+		marginHeight = (offsets[2] + offsets[3]) * subH
 	}
+
+	info.DisplayWidth = uint16(max(1, int(width)-int(marginWidth)))
+	info.DisplayHeight = uint16(max(1, int(height)-int(marginHeight)))
 
 	lumaDepth, err := r.ue()
 	if err != nil {

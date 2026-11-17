@@ -84,8 +84,8 @@ func TestAgainstACapture(t *testing.T) {
 		if !ok {
 			t.Fatalf("segment %d is missing", i)
 		}
-		if typ := boxType(data, stypLen); typ != "moof" {
-			t.Fatalf("segment %d has %q after styp, want moof", i, typ)
+		if findBox(data, "moof") < 0 {
+			t.Fatalf("segment %d has no moof", i)
 		}
 	}
 

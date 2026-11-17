@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"net/url"
@@ -123,9 +124,9 @@ func TestHLSPlaylistAndSegments(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("segment returned %d", resp.StatusCode)
 	}
-	// CMAF segments start with styp, then the moof.
-	if len(seg) < 36 || string(seg[4:8]) != "styp" || string(seg[32:36]) != "moof" {
-		t.Fatalf("segment is not styp+moof: %x", seg[:min(36, len(seg))])
+	// CMAF segments start with styp and an index, then the fragment.
+	if len(seg) < 80 || string(seg[4:8]) != "styp" || !bytes.Contains(seg[:200], []byte("moof")) {
+		t.Fatalf("segment is not CMAF-shaped: %x", seg[:min(80, len(seg))])
 	}
 }
 

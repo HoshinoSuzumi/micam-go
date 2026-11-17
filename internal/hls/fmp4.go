@@ -119,8 +119,8 @@ func buildVisualSampleEntry(info spsInfo, ps paramSets) []byte {
 	entry = append(entry, u32(0)...)        // pre_defined[3]
 	entry = append(entry, u32(0)...)
 	entry = append(entry, u32(0)...)
-	entry = append(entry, u16(info.Width)...)
-	entry = append(entry, u16(info.Height)...)
+	entry = append(entry, u16(info.DisplayWidth)...)
+	entry = append(entry, u16(info.DisplayHeight)...)
 	entry = append(entry, u32(0x00480000)...)  // horizresolution 72dpi
 	entry = append(entry, u32(0x00480000)...)  // vertresolution 72dpi
 	entry = append(entry, u32(0)...)           // reserved
@@ -192,19 +192,41 @@ func buildFragment(sequence uint32, baseTime uint64, samples []fragmentSample) [
 	moof = box("moof", mfhd, box("traf", tfhd, tfdt, trun))
 
 	var payload []byte
+	totalTicks := uint32(0)
 	for _, s := range samples {
 		payload = append(payload, s.data...)
+		totalTicks += s.duration
 	}
 
-	// CMAF segments start with a segment type box. Players that expect it are
-	// usually tolerant, but the cost is 24 bytes and it removes a difference from
-	// the output ffmpeg produces, which is the shape browsers are tested against.
+	// CMAF segments start with a segment type box, then an index, exactly the
+	// order ffmpeg writes. Both are optional in the specification and ffmpeg-based
+	// players ignore them, but matching the reference removes differences from the
+	// files browser implementations are tested against.
 	styp := box("styp",
 		[]byte("iso5"), u32(0),
 		[]byte("iso5"), []byte("iso6"), []byte("mp41"),
 	)
+	mdat := box("mdat", payload)
+	sidx := buildSidx(uint32(len(moof)+len(mdat)), totalTicks)
 
-	return append(append(styp, moof...), box("mdat", payload)...)
+	return append(append(append(styp, sidx...), moof...), mdat...)
+}
+
+// buildSidx is the segment index: one reference covering the fragment that
+// follows it.
+func buildSidx(referenceSize, duration uint32) []byte {
+	body := make([]byte, 0, 28)
+	body = append(body, u32(1)...)             // reference_ID
+	body = append(body, u32(mp4Timescale)...)  // timescale
+	body = append(body, u32(0)...)             // earliest_presentation_time
+	body = append(body, u32(0)...)             // first_offset
+	body = append(body, u16(0)...)             // reserved
+	body = append(body, u16(1)...)             // reference_count
+	body = append(body, u32(referenceSize)...) // reference_type 0 (media) + size
+	body = append(body, u32(duration)...)      // subsegment_duration
+	body = append(body, u32(0x90000000)...)    // starts_with_SAP, SAP type 1
+
+	return fullBox("sidx", 0, 0, body)
 }
 
 func buildTrun(samples []fragmentSample, dataOffset uint32) []byte {

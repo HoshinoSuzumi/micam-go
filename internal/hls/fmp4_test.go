@@ -68,6 +68,22 @@ func TestFragmentDataOffsetPointsAtMdat(t *testing.T) {
 	}
 }
 
+// findBox returns the offset of the first top-level box of the given type, or -1.
+func findBox(data []byte, want string) int {
+	off := 0
+	for off+8 <= len(data) {
+		size := int(binary.BigEndian.Uint32(data[off : off+4]))
+		if size < 8 || off+size > len(data) {
+			return -1
+		}
+		if string(data[off+4:off+8]) == want {
+			return off
+		}
+		off += size
+	}
+	return -1
+}
+
 // child finds a box by type among the boxes starting at off.
 func child(data []byte, off int, want string) []byte {
 	for off+8 <= len(data) {
