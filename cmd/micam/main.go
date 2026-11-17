@@ -73,7 +73,10 @@ func serve(ctx context.Context, opts *cli.Options, log *slog.Logger) int {
 	}
 	opts.Apply(c)
 
-	if c.User == "" {
+	// The account name is only needed to derive the userId cookie for a login. An
+	// explicit --user-id already answers that, so asking for it afterwards would be
+	// noise on the one command that should be copy-pasteable.
+	if c.User == "" && c.UserID == "" {
 		user, err := cli.PromptRequired("Mi account (id, email or phone)")
 		if err != nil {
 			log.Error("no account given", "err", err)
@@ -191,7 +194,10 @@ func authenticate(ctx context.Context, client *cloud.Client, opts *cli.Options,
 				"hint", "confirming that URL will not help; copy the passToken cookie from a browser")
 		case errors.Is(err, cloud.ErrPassTokenRejected):
 			log.Error("the passToken was rejected by the account service",
-				"hint", "the userId cookie must be the numeric account id: pass --user-id 1234567890, or log in with --password")
+				"err", err,
+				"hint", "the token expired, or it belongs to a different account than --user-id; "+
+					"copy a fresh one from a browser logged into that account, "+
+					"or reuse the token the container already renewed in data/credentials.json")
 		case errors.Is(err, cloud.ErrNoPassword):
 			log.Error("no cached session and no password",
 				"hint", "pass --pass-token or set MICAM_PASS_TOKEN")

@@ -201,6 +201,44 @@ printf '%s' "$PASS_TOKEN" > secrets/pass_token
 三个常见错误：把手机号当 `userId`（登录会报 passToken 被拒绝）；取了 `cUserId` 或
 `serviceToken`；把 `passToken` 泄露到仓库里——它能访问你账号下的所有设备。
 
+**`passToken was rejected` 到底是什么意思**：`account.xiaomi.com/pass/serviceLogin` 没有返回
+`ssecurity`，小米对这对 cookie 的答复是 `code=70016 登录验证失败`。它只说明「这个 userId
+配不上这个 token」，和 userId 的格式无关——数字账号也可能被拒。按概率排：
+
+1. token 已经失效：改过密码、点过「退出所有设备」、或放太久被轮换了；
+2. 浏览器登录的是**另一个账号**，和 `--user-id` 对不上——同一浏览器里两个号很常见；
+3. 复制时被截断或多带了空格（token 很长，终端会折行）。
+
+排查时别再从浏览器重抄一遍，直接用容器里那份——每次登录成功都会把小米轮换后的新 token
+写回 `data/credentials.json`，所以它是最新的：
+
+```sh
+sudo jq -r .passToken data/credentials.json
+```
+
+日志里会带一个不泄密的指纹，用来判断两份是不是同一个东西：
+
+```
+err="cloud: the passToken was rejected: code=70016 登录验证失败
+     (sent userId=\"2255231260\", passToken 144 bytes, sha256 9f2c1ab4)"
+```
+
+```sh
+# 容器里那份的指纹
+jq -r .passToken data/credentials.json | tr -d '\n' | shasum -a 256
+```
+
+长度和 sha256 前 8 位都对得上、却还是 70016，那就是 token 真的过期了；对不上，就是抄错了。
+
+命令行传长 token 容易出事，建议走文件：
+
+```sh
+printf '%s' '<TOKEN>' > /tmp/pt && chmod 600 /tmp/pt
+MICAM_PASS_TOKEN_FILE=/tmp/pt ./micam --user-id 2255231260
+```
+
+`--user-id` 已经给了数字账号，就不会再追问账号名了。
+
 想降低风险，可以用小米的「设备共享」把摄像头共享给一个小号，用那个小号登录。
 
 ## Docker（ARM fnOS）

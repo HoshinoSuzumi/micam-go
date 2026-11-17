@@ -23,8 +23,10 @@ func fakeLogin(t *testing.T, passTokenAccepted bool) *httptest.Server {
 			return
 		}
 		// What the service returns when the passToken is not accepted: the form
-		// parameters for a fresh login, and no ssecurity.
-		io.WriteString(w, `&&&START&&&{"qs":"%3Fsid%3Dxiaomiio","callback":"cb","_sign":"sig"}`)
+		// parameters for a fresh login, and no ssecurity. Measured against the real
+		// endpoint: an invalid token answers 70016 "登录验证失败".
+		io.WriteString(w, `&&&START&&&{"code":70016,"description":"登录验证失败",`+
+			`"qs":"%3Fsid%3Dxiaomiio","callback":"cb","_sign":"sig"}`)
 	}))
 	t.Cleanup(srv.Close)
 	return srv
@@ -46,6 +48,16 @@ func TestLoginRejectsStalePassToken(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "15023365994") {
 		t.Fatalf("the error must name the userId that was sent: %v", err)
+	}
+	// The service's own code and description must survive to the log: "rejected"
+	// alone sent the last debugging session in the wrong direction.
+	if !strings.Contains(err.Error(), "70016") || !strings.Contains(err.Error(), "登录验证失败") {
+		t.Fatalf("the error must carry the service's explanation: %v", err)
+	}
+	// The token never appears, but its fingerprint does: it is what lets two
+	// machines compare copies without pasting the secret around.
+	if !strings.Contains(err.Error(), "5 bytes") {
+		t.Fatalf("the error must fingerprint the token that was sent: %v", err)
 	}
 }
 

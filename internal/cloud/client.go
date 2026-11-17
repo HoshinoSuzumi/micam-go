@@ -6,6 +6,7 @@ import (
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -124,11 +125,20 @@ func (c *Client) Login(ctx context.Context, password string) error {
 
 	if step.Ssecurity == "" {
 		if password == "" {
-			// A passToken was offered but the account service did not accept it.
-			// The usual cause is the userId cookie: it must be the numeric
-			// account id, not a phone number or an email.
+			// The account service explained itself; report that instead of guessing.
+			if step.NotificationURL != "" {
+				return &TwoFactorError{URL: step.NotificationURL.String()}
+			}
 			if c.creds.CanRenew() {
-				return fmt.Errorf("%w (sent userId=%q)", ErrPassTokenRejected, c.cookieUserID())
+				detail := rejectionDetail(step)
+				if detail != "" {
+					return fmt.Errorf("%w: %s (sent userId=%q, passToken %s)",
+						ErrPassTokenRejected, detail, c.cookieUserID(),
+						tokenFingerprint(c.creds.PassToken))
+				}
+				return fmt.Errorf("%w (sent userId=%q, passToken %s)",
+					ErrPassTokenRejected, c.cookieUserID(),
+					tokenFingerprint(c.creds.PassToken))
 			}
 			return ErrNoPassword
 		}
@@ -507,6 +517,34 @@ type loginStep struct {
 	Callback        flexString `json:"callback"`
 	Qs              flexString `json:"qs"`
 	Sign            flexString `json:"_sign"`
+	Code            flexString `json:"code"`
+	Desc            flexString `json:"description"`
+}
+
+// rejectionDetail renders what the account service said, so the caller can tell an
+// expired token (70016 "登录验证失败") from a userId that belongs to another
+// account - both arrive as "no ssecurity" and used to look identical.
+func rejectionDetail(step *loginStep) string {
+	var parts []string
+	if code := strings.TrimSpace(step.Code.String()); code != "" && code != "0" {
+		parts = append(parts, "code="+code)
+	}
+	if desc := strings.TrimSpace(step.Desc.String()); desc != "" {
+		parts = append(parts, desc)
+	}
+	return strings.Join(parts, " ")
+}
+
+// tokenFingerprint identifies a passToken without printing it: its length and the
+// first bytes of its SHA-256. Two copies that look alike can differ by a trailing
+// space or a truncated tail, and comparing fingerprints across machines answers
+// "is it even the same token?" without putting the secret in a log.
+func tokenFingerprint(token string) string {
+	if token == "" {
+		return "none"
+	}
+	sum := sha256.Sum256([]byte(token))
+	return fmt.Sprintf("%d bytes, sha256 %s", len(token), hex.EncodeToString(sum[:4]))
 }
 
 // flexString accepts either a JSON string or a bare number, because userId
