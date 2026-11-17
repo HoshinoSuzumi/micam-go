@@ -15,10 +15,6 @@ const (
 	nalTypeCRA      = 21
 	nalTypeRsvIRAP  = 23
 
-	// stypLen is the size of the segment type box written before each fragment:
-	// 8-byte header, major brand, minor version, three compatible brands.
-	stypLen = 28
-
 	nalTypeVPS = 32
 	nalTypeSPS = 33
 	nalTypePPS = 34
@@ -82,7 +78,3 @@ func nalType(nal []byte) int {
 
 // isVCL reports whether the NAL carries picture data.
 func isVCL(t int) bool { return t >= 0 && t <= 31 }
-
-// isParamSet reports whether the NAL is VPS, SPS or PPS: these belong in the
-// init segment, not in a sample.
-func isParamSet(t int) bool { return t == nalTypeVPS || t == nalTypeSPS || t == nalTypePPS }
