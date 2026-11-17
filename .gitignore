@@ -18,9 +18,10 @@
 *.log
 .DS_Store
 
-# captures produced by --dump and by curl
-*.h265
-*.ts
+# captures produced by --dump and by curl. 只匹配仓库根目录：`*.ts` 会连
+# TypeScript 源码一起忽略掉，web/ 下的 .ts 曾经因此没被提交，CI 里就找不到模块。
+/*.h265
+/*.ts
 
 # fpk build output
 /packaging/fnos/app/bin/
