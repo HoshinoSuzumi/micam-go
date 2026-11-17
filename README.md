@@ -1,493 +1,288 @@
 # micam-go
 
-小米米家摄像头的无头取流服务，**Go 重写**。协议与
-[eugeneRover/micam](https://github.com/eugeneRover/micam)（Java，commit `2cc9d9e`）互通：
-登录小米云 → 走官方 App 同款 CS2 中继 → 与摄像头建立 MISS 会话 → 解密媒体 →
-**不转码**，原样复用成 MPEG-TS 经 HTTP 输出。
+把小米米家摄像头变成一条 MPEG-TS over HTTP 的流，**不转码**。
 
-单静态二进制 6.8 MB，`CGO_ENABLED=0`，可直接交叉编译到 `linux/arm64`。
+登录小米云拿到会话参数，走官方 App 同款 CS2 中继，或者在同网段时直接连摄像头，建立
+MISS 会话后解密媒体，原样复用成 TS 输出。协议层是
+[eugeneRover/micam](https://github.com/eugeneRover/micam)（Java）的 Go 重写，两边互通。
 
-## 当前状态
+- 单个静态二进制，`CGO_ENABLED=0`，`linux/arm64` 与 `amd64` 都直接交叉编译
+- 不转码：CPU 只花在解密和 TS 复用上，输出码率等于摄像头码率
+- 优先局域网直连，失败自动回落中继
+- 断流按连续失败计数重连；云接口不可达时不退出、也不占重试额度
+- fnOS 应用包自带管理界面：配置、启停、连接状态、运行日志
 
-全流程已在真机跑通：登录 → 取会话参数 → 中继或局域网直连 → 解密 → HTTP 分发 → 播放器出画。
+## 准备凭据
 
-| 阶段 | 内容 | 状态 |
-|---|---|---|
-| 计划 1 | 语言无关协议规格 + golden vectors + 独立校验器 | ✅ 127 项断言全绿 |
-| 计划 2 | 模块划分、接口设计、go2rtc 复用清单 | ✅ `docs/DESIGN.md` |
-| M0 | 模块骨架 + 向量加载器 | ✅ |
-| M1 | PPPP 线格式 / initstring / 0x28 / DRW | ✅ |
-| M2 | 云登录 / 签名 / 设备列表 / 供给 + 凭据存储 | ✅ 已用真实账号验证 |
-| M3 | 密钥协商、媒体解密、MISS 客户端 | ✅ 已出画 |
-| M4 | 中继握手 + 会话通道 | ✅ 中继与局域网两条路径均验证 |
-| M5 | TS 复用 / HTTP 分发 / CLI | ✅ PotPlayer 连续播放 |
-| M6 | Dockerfile(arm64) + compose | ✅ |
+### userId 与 passToken
 
-## 目录
+小米没有提供查看它们的界面，只能从浏览器 Cookie 里取：
 
-```
-cmd/micam/              入口：参数、登录、选摄像头、串联全流程
-internal/pppp/          Frame / UID / AddrBlock / InitString / 0x28 / DRW / 中继 / 会话
-internal/cloud/         登录、两步签名、RC4-drop1024、设备列表、miss_get_vendor
-internal/creds/         credentials.json 读写（0600、原子替换）
-internal/miss/          X25519 + HSalsa20 会话密钥、ChaCha20 媒体解密、MISS 客户端
-internal/ts/            MPEG-TS 复用（PAT/PMT/PES/PCR、单调时钟修复）
-internal/stream/        HTTP 分发、每观众独立复用器与有界队列
-internal/cli/           参数解析与交互提示
-docs/PROTOCOL.md        协议规格（本项目的唯一真相）
-docs/DESIGN.md          Go 设计、里程碑、与上游的差异
-testdata/vectors.json   golden vectors（验收基线）
-tools/verify_vectors.py 独立实现，校验上述向量
-```
+1. 浏览器打开 <https://account.xiaomi.com> 并登录（就是平时登录米家 App 的账号）
+2. `F12` → Application → Storage → Cookies → `https://account.xiaomi.com`
+3. 过滤 `userId`，取**名字正好是 `userId`** 那一行的 Value，是一串纯数字
+4. 过滤 `passToken`，取对应 Value
 
-## 构建与测试
+别拿错行：列表里还有 `cUserId`、`serviceToken`。`userId` 是数字 ID，不是手机号。
+
+`passToken` 近似等价于账号密码，能访问该账号下的所有设备。用文件而不是命令行或环境变量
+传它，权限 `600`：
 
 ```sh
-go test ./...     # 除 golang.org/x/crypto 外无第三方依赖
-go vet ./...
-make build        # -> bin/micam
-make cross        # -> bin/micam-linux-arm64 (6.8 MB)
+printf '%s' '<passToken>' > secrets/pass_token
+chmod 600 secrets/pass_token
 ```
+
+想降低风险，可以用小米的「设备共享」把摄像头共享给一个小号，用那个小号登录。
+
+### 拿 DID
+
+```sh
+micam --list-cameras --user-id 2255231260 --pass-token "$(cat secrets/pass_token)"
+```
+
+```
+  DID          MODEL                     NAME    STATUS
+  1221672311   xiaomi.camera.92ac1       小鸡    online
+```
+
+只做登录和 `device_list`，不建会话、不占端口。凭据缓存在 `--data-dir`（默认
+`~/.micam`），之后可以省略 `--user-id` / `--pass-token`。
 
 ## 运行
 
+### 静态二进制
+
+从 [Releases](https://github.com/HoshinoSuzumi/micam-go/releases) 下载对应架构的文件，
+放到 NAS 或任意常开的机器上：
+
 ```sh
-micam --did 1234567890 --region cn --port 8554
+chmod +x micam-linux-amd64
+export MICAM_PASS_TOKEN_FILE=$PWD/secrets/pass_token
+./micam-linux-amd64 --user-id 2255231260 --did 1221672311 --bind 0.0.0.0
+# 流：http://<机器地址>:8554/cam.ts
 ```
+
+`--bind` 默认是 `127.0.0.1`，只有本机能打开。要让局域网或 Tailscale 访问就改成 `0.0.0.0`
+（启动日志会列出每块网卡可用的地址）。
+
+用 systemd 常驻：
+
+```ini
+# /etc/systemd/system/micam.service
+[Unit]
+Description=micam
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/micam --did 1221672311 --bind 0.0.0.0
+Environment=MICAM_PASS_TOKEN_FILE=/etc/micam/pass_token
+Environment=HOME=/var/lib/micam
+StateDirectory=micam
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Docker Compose
+
+```sh
+git clone https://github.com/HoshinoSuzumi/micam-go && cd micam-go
+cp .env.example .env                      # 填 MICAM_USER（数字账号 ID）与 MICAM_DID
+mkdir -p data secrets
+printf '%s' '<passToken>' > secrets/pass_token
+sudo chown -R 10001:10001 data
+sudo chown 10001:10001 secrets/pass_token
+sudo chmod 400 secrets/pass_token
+docker compose pull && docker compose up -d
+```
+
+镜像在 `hoshinosuzumi/micam-go`（另有 GHCR）。容器以 uid 10001 运行，`./data` 是它的
+`$HOME`，会话缓存在这里。
+
+**必须用 host 网络。** 局域网直连依赖发往 `255.255.255.255` 的广播，Docker 的 bridge
+不会把它送到物理网段，摄像头收不到就会静默退回中继。host 模式下不能写 `ports:`，
+8554 直接开在宿主机上。
+
+摄像头不在同一网段（VPS 部署）时反过来用 bridge：注释 `network_mode: host`，加回
+`ports: ["8554:8554"]`，并设 `MICAM_LAN=off` 省掉必然失败的 3 秒广播等待。
+
+### fnOS 应用包
+
+从 Releases 下载 `micam_<版本>_amd64.fpk`（x86）或 `_arm64.fpk`，在应用中心上传安装。
+装好后应用卡片打开的就是管理界面：
+
+![管理界面](docs/ui.png)
+
+配置、启停、连接状态、日志都在这里，不需要回「应用设置」改完等重启。几个细节：
+
+- 配置和「应用设置」写的是同一份 `etc/micam.env`
+- 会话缓存放在安装时创建的 `micam-go` 共享目录，文件管理器里可见，备份就是拷一个
+  `credentials.json`
+- 「播放地址」按网卡列出可选地址（`enp1s0`、`tailscale0`…），选中后下面的 mpv / vlc /
+  ffplay 命令跟着换，点一下即复制
+- 界面和 API 都在飞牛网关的 CGI 后面，不额外开端口
+
+自己打包：
+
+```sh
+make web                        # 构建界面，需要 Node 20+
+make fpk                        # 出 amd64 与 arm64 两个包
+# 需要 fnpack：https://developer.fnnas.com/docs/cli/fnpack
+```
+
+包结构、目录布局和真机待确认项见 [`packaging/fnos/README.md`](packaging/fnos/README.md)。
+
+## 配置
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `--user` | 提示 | 小米账号（uid / 手机 / 邮箱） |
-| `--user-id` | — | **数字**账号 ID；用 `passToken` 登录时必填 |
+| `--user-id` | — | 数字账号 ID；用 `passToken` 登录时必填 |
+| `--pass-token` | — | 浏览器复制的 `passToken`，免密码免 2FA |
+| `--password` | — | 账号密码；常被 2FA 拦住，优先用 `passToken` |
 | `--region` | `cn` | `cn` `de` `sg` `us` `ru` `i2` |
 | `--did` | 提示 | 要取流的摄像头 DID |
-| `--bind` | `127.0.0.1` | HTTP 监听地址；容器里用 `0.0.0.0` |
+| `--bind` | `127.0.0.1` | HTTP 监听地址 |
 | `--port` | `8554` | HTTP 端口 |
 | `--quality` | `2` | 0 auto / 1 SD / 2 HD / 3 full；协议支持到 5，新机型常把全分辨率放在 3 |
-| `--pts-lead` | `100` | 画面提前量（毫秒）：越小越跟手，越大对软件解码越宽容 |
-| `--list-cameras` | off | 只登录并列出摄像头（DID / 型号 / 在线状态）后退出，不连中继、不开端口 |
-| `--reconnect` | `0` | **连续**断流后自动重连的次数；`0` 表示不重连，交给编排层重启 |
-| `--data-dir` | `~/.micam` | 存放 `credentials.json` 的目录；家目录不可写时用它换位置 |
-| `--lan` | `prefer` | `prefer` 先试局域网直连、失败回落中继；`only` 只用局域网；`off` 只用中继 |
-| `--dump` | — | 把解密后的裸码流存到文件，不对外提供 HTTP |
-| `--dump-seconds` | `5` | `--dump` 的抓取时长 |
+| `--pts-lead` | `100` | 画面提前量（毫秒），越小越跟手 |
+| `--lan` | `prefer` | `prefer` 先试直连再回落；`only` 只用直连；`off` 只用中继 |
+| `--reconnect` | `0` | 连续断流后的重连次数；`0` 交给编排层重启 |
+| `--data-dir` | `~/.micam` | `credentials.json` 所在目录 |
 | `--connect-timeout` | `90` | 中继握手总超时（秒） |
-| `--pass-token` | — | 浏览器复制的 `passToken`，免密码免 2FA |
+| `--list-cameras` | off | 只列设备后退出 |
 | `--relogin` | off | 丢弃缓存会话重新登录 |
+| `--dump` | — | 把裸码流写到文件，不对外提供 HTTP（配合 `--dump-seconds`） |
+| `--status-file` | — | 周期性写出状态 JSON，供管理界面读取 |
 | `--verbose` | off | 逐包打印 PPPP |
 
-环境变量：`MICAM_USER` `MICAM_USER_ID` `MICAM_REGION` `MICAM_DID` `MICAM_PASS_TOKEN`
-`MICAM_PASS_TOKEN_FILE` `MICAM_BIND` `MICAM_PORT` `MICAM_QUALITY` `MICAM_PTS_LEAD`
-`MICAM_RECONNECT` `MICAM_LAN` `MICAM_VERBOSE`。
+环境变量与参数同名（`MICAM_` 前缀），容器里改不了命令行时就用它。`MICAM_PASS_TOKEN_FILE`
+是唯一没有对应参数的一个：从文件读 token，比把它放进环境变量安全——`docker inspect`
+会把 env 原样打印出来。
 
-容器里改不了命令行参数，`--verbose` 用 `MICAM_VERBOSE=1` 打开。
+`--relogin`、`--dump`、`--dump-seconds`、`--connect-timeout`、`--list-cameras` 只能用命令行。
 
-### 先拿到 DID
-
-```sh
-micam --list-cameras --region cn --user <账号> --pass-token <token>
-```
-
-```
-  DID          MODEL                          NAME          STATUS
-  312345678    chuangmi.camera.ipc019         客厅          online
-  412345678    chuangmi.camera.029a02         门口          OFFLINE
-```
-
-只做登录与 `device_list`，不建 UDP 会话、不占 HTTP 端口——最省事的查询方式。
-
-### 局域网直连
-
-默认 `--lan prefer`：先用 `device_list` 里的 `localip`，在摄像头的 **UDP 32108** 上直接尝试
-建立会话。成功的话**完全不走中继**，延迟从几十毫秒降到个位数，也不受云端抖动影响：
-
-```
--> camera:32108   LAN_SEARCH
-<-                PUNCH_PKT
-->                原样回送该包
-<-                P2P_RDY        （此后对端端口 = 摄像头会话端口）
-   之后就是普通的 DRW / MISS 流量，与中继路径完全一致
-```
-
-失败时（不在同一网段、摄像头不响应搜索、或 3 秒内无应答）自动回落中继，日志留一条
-`no direct local session, using the relay` 的 WARN。
-
-两种传输都支持：摄像头可以在 `P2P_RDY` 里选择 **UDP**，也可以选择 **TCP**（`cs2+tcp`，
-`xiaomi.camera.92ac1` 这类新机型就是）。TCP 更稳——不受 MTU 与丢包影响——但少了 UDP 的
-乱序重组，代码里按传输能力自动切换。
-
-注意两点：摄像头必须与 micam 在**同一网段**；`localip` 是摄像头自己上报的，换了网络可能过期。
-`--lan only` 可以强制只走局域网（调试用），`--lan off` 则完全跳过这次尝试。
-
-退出码与上游一致：`1` 无摄像头/传输不支持，`2` 登录或 2FA，`3` 中继失败，`4` 离线，
+退出码：`1` 无摄像头或传输不支持，`2` 登录 / 2FA，`3` 会话失败，`4` 摄像头离线，
 `5` 无媒体，`6` 端口占用。
 
-### 画面与延迟
+## 局域网直连
 
-**画面不如米家 App 清晰**：先看码流实际分辨率。
+摄像头与 micam 在同一网段时，先广播找它，再建立直连会话，媒体完全不走中继：
 
-```sh
-ffprobe -v error -select_streams v -show_entries stream=width,height -of csv=p=0 http://127.0.0.1:8554/cam.ts
+```
+-> 255.255.255.255:32108   LAN_SEARCH
+<-                         PUNCH_PKT（payload 是摄像头 UID）
+->                         原样回送该包
+<-                         P2P_RDY / P2P_RDY_TCP
+   之后是普通的 DRW / MISS 流量，与中继路径一致
 ```
 
-低于手机上看到的，就把 `--quality` 往上调。`2` 通常是 HD，`3` 才是全分辨率（实测
-`xiaomi.camera.92ac1` 如此），部分型号还接受 `4`/`5`；摄像头会忽略不认识的值。
+实测 `xiaomi.camera.92ac1` 有两个特点：只回应广播、忽略单播；只提供 TCP 会话。所以
+`Link` 抽象同时支持 UDP 和 TCP，媒体解密那层不做区分。
 
-**延迟**由这几层叠加，从上到下影响递减：
+`localip` 是摄像头自己上报的，换网络后可能过期；直连失败会在日志留一条
+`no direct local session, using the relay` 并回落中继。
+
+## 画质与延迟
+
+分辨率不对先用 ffprobe 看码流：
+
+```sh
+ffprobe -v error -select_streams v -show_entries stream=width,height \
+  -of csv=p=0 http://127.0.0.1:8554/cam.ts
+```
+
+低于米家 App 里看到的分辨率，就把 `--quality` 往上调；摄像头会忽略不认识的值。
+
+延迟主要来自播放器，其次才是这条链路：
 
 | 来源 | 量级 | 怎么减 |
 |---|---|---|
-| 播放器缓冲 | 2–10s | 换硬解播放器（mpv `--hwdec=auto`、PotPlayer），或调小其缓存 |
-| PTS 提前量 | `--pts-lead`，默认 100ms | 调到 0 最跟手，代价是软件解码容易丢帧 |
-| 观众队列 | ≤ 25 帧（约 1.2s） | 落后时整段丢弃并重同步到关键帧，不会累积 |
-| 传输 | 局域网 <10ms / 中继 20–80ms | 用 `--lan prefer` |
+| 播放器缓冲 | 2–10s | 换硬解播放器（mpv `--hwdec=auto`、PotPlayer），或调小缓存 |
+| PTS 提前量 | 默认 100ms | `--pts-lead 0` 最跟手，软件解码容易丢帧 |
+| 观众队列 | ≤ 25 帧 | 落后时整段丢弃、重同步到关键帧，不会累积 |
+| 传输 | 局域网 <10ms / 中继 20–80ms | `--lan prefer` |
 
-**关于 `<codec> @ ... Could not find ref with POC ...` 这类报错**：先确认是不是播放器的问题。
+## 排错
+
+**画面能出但报 `Could not find ref with POC`**：先确认不是播放器的问题。
 
 ```sh
 ffmpeg -v error -i http://127.0.0.1:8554/cam.ts -t 10 -f null -
 ```
 
-输出为空说明我们发出的码流是干净的，报错来自播放器**实时解码跟不上、自己丢帧**——
-2K H.265 用软件解码很容易触发，换硬件解码即可。同样可以用 `--dump` 存一份裸码流离线验证。
+输出为空说明码流是干净的，报错来自播放器实时解码跟不上、自己丢帧。2K H.265 用软件解码
+很容易触发，换硬件解码即可。也可以用 `--dump` 存一份裸码流离线比对。
 
-### 断流与重连
-
-`the camera stopped sending` 现在会带上真正的原因（`err=`），不再只是一句"停了"：
+**断流**：日志里的 `the camera stopped sending` 会带 `err=`，按它区分：
 
 | `err` | 含义 | 往哪查 |
 |---|---|---|
-| `pppp: the camera closed the session` | 摄像头主动结束了会话 | 摄像头重启、被米家 App/HA 抢占、供电 |
-| `pppp: no media for the idle timeout` | 15s 无媒体但连接还在 | 掉电、Wi-Fi 掉线——半开连接不会报错，只能靠看门狗发现 |
-| `EOF` / `connection reset by peer` | socket 层断开 | 同上，通常是网络或摄像头侧 |
+| `pppp: the camera closed the session` | 摄像头主动结束会话 | 摄像头重启、被米家 App / HA 抢占、供电 |
+| `pppp: no media for the idle timeout` | 15 秒没有媒体但连接还在 | 掉电、Wi-Fi 掉线；半开连接不报错，只能靠看门狗发现 |
+| `EOF` / `connection reset by peer` | 传输层断开 | 同上，通常是网络或摄像头侧 |
 
-重连额度按**连续失败**计：会话跑满 60 秒就算这次故障结束，计数器清零。所以"稳跑一夜
-再掉线"不会消耗额度。Mi 云接口不可达（`the Mi cloud is unreachable`）不算会话失败，
-既不占额度也不会 `giving up`——重启进程修不好 DNS，只会把同一次登录失败重复一遍。
+重连额度按**连续失败**计：会话跑满 60 秒就清零，稳跑一夜后掉线不会消耗额度。
+`the Mi cloud is unreachable` 不算会话失败，既不占额度也不会 `giving up`。
 
-半夜断流时按顺序排除：
+**`passToken was rejected`**：`account.xiaomi.com` 返回的 `code=70016`，意思是这个
+`userId` 和 `passToken` 配不上，与格式无关。按概率是 token 过期（改过密码、退过所有设备）、
+浏览器登录的是另一个账号、或者复制被截断。
 
-```sh
-docker compose logs | grep -E "stopped sending|dropped the stream|cloud is unreachable"
-ping -i 1 192.168.0.109        # 摄像头是否在丢包/重启
-ss -tnp | grep 192.168.0.109   # 是否同时有别的客户端占着这个会话
-cat /etc/resolv.conf           # 解析器指向 100.100.100.100 / fd7a:115c:a1e0::53 就是 Tailscale
-systemctl status tailscaled    # MagicDNS 挂了会让 api.io.mi.com 整体不可达
-```
-
-`viewers=0` 说明当前没有人看，但流仍在以 20fps 持续拉取——摄像头会一直满负荷编码。
-如果长时间没人看，停掉容器比让它空转更省摄像头寿命。
-
-### 二次验证
-
-密码登录若被 2FA 挑战，确认那个 URL **没有用**——验证绑定浏览器的 deviceId。
-唯一出路是在浏览器登录 `https://account.xiaomi.com`，从 DevTools 复制 `passToken`：
+别从浏览器重抄，直接用 `credentials.json` 里那份，它每次登录成功都会被小米轮换后的新
+token 覆盖：
 
 ```sh
-printf '%s' "$PASS_TOKEN" > secrets/pass_token
+jq -r .passToken ~/.micam/credentials.json
 ```
 
-`passToken` 近似等价于账号密码，务必 `chmod 600`。
+日志里的错误会带一个不泄密的指纹（长度 + sha256 前 8 位），可以拿来比对两份是不是同一个。
 
-### 怎么取 userId 与 passToken
+**外网打不开**：先确认 `--bind` 不是 `127.0.0.1`。`curl -I http://<地址>:8554/cam.ts`
+返回 `200` 才算通；`Connection refused` 是没在听，一直卡住是防火墙。流本身没有鉴权，
+只应放在可信网段，或者前面挂一层带认证的反向代理。
 
-两者都只在登录后的 Cookie 里，小米没有提供查看它们的界面：
-
-1. 浏览器（Chrome / Edge）打开 `https://account.xiaomi.com` 并登录；
-2. 按 <kbd>F12</kbd> → **Application**（应用）→ **Storage → Cookies → `https://account.xiaomi.com`**；
-3. 过滤框输入 `userId`，取**名字正好是 `userId`** 那一行的 Value：一串纯数字；
-4. 过滤框改成 `passToken`，取对应 Value（长得多）。
-
-三个常见错误：把手机号当 `userId`（登录会报 passToken 被拒绝）；取了 `cUserId` 或
-`serviceToken`；把 `passToken` 泄露到仓库里——它能访问你账号下的所有设备。
-
-**`passToken was rejected` 到底是什么意思**：`account.xiaomi.com/pass/serviceLogin` 没有返回
-`ssecurity`，小米对这对 cookie 的答复是 `code=70016 登录验证失败`。它只说明「这个 userId
-配不上这个 token」，和 userId 的格式无关——数字账号也可能被拒。按概率排：
-
-1. token 已经失效：改过密码、点过「退出所有设备」、或放太久被轮换了；
-2. 浏览器登录的是**另一个账号**，和 `--user-id` 对不上——同一浏览器里两个号很常见；
-3. 复制时被截断或多带了空格（token 很长，终端会折行）。
-
-排查时别再从浏览器重抄一遍，直接用容器里那份——每次登录成功都会把小米轮换后的新 token
-写回 `data/credentials.json`，所以它是最新的：
+## 构建
 
 ```sh
-sudo jq -r .passToken data/credentials.json
+go test ./...              # 只依赖 golang.org/x/crypto
+make build                 # -> bin/micam
+make cross                 # -> bin/micam-linux-arm64
+make web && make fpk       # fnOS 应用包
 ```
 
-日志里会带一个不泄密的指纹，用来判断两份是不是同一个东西：
+版本号来自 git tag，构建时用 `-ldflags -X micam/internal/cli.Version=…` 注入。
+`make build` 走 `scripts/version.sh`，本地显示的是 `git describe` 的结果
+（例如 `0.6.2-3-gabc1234`，有未提交改动时带 `-dirty`）。
+
+发布由 Actions 里的 `release` 工作流完成：它把版本号写回 `manifest` 和 `package.json`、
+打 tag、构建多架构镜像和两个 fpk，产物挂到 GitHub Release。只需 `GITHUB_TOKEN`；
+要同时推 Docker Hub，加 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN` 两个 secret。
+
+## 目录
 
 ```
-err="cloud: the passToken was rejected: code=70016 登录验证失败
-     (sent userId=\"2255231260\", passToken 144 bytes, sha256 9f2c1ab4)"
+cmd/micam/              入口、参数、登录、选摄像头、串联全流程、管理 API
+internal/pppp/          Frame / UID / AddrBlock / InitString / 0x28 / DRW / 中继 / 会话
+internal/cloud/         登录、两步签名、RC4-drop1024、设备列表、miss_get_vendor
+internal/miss/          X25519 + HSalsa20 会话密钥、ChaCha20 媒体解密
+internal/ts/            MPEG-TS 复用（PAT/PMT/PES/PCR、单调时钟修复）
+internal/stream/        HTTP 分发、每观众独立复用器与有界队列
+internal/status/        状态文件（管理界面读它）
+internal/ctl/           管理 API，作为 CGI 挂在飞牛网关下
+web/                    管理界面源码（Svelte + Tailwind）
+packaging/fnos/         fnOS 应用包
+scripts/version.sh      从 tag 取版本号
+docs/PROTOCOL.md        协议规格
+docs/DESIGN.md          Go 设计与里程碑
 ```
 
-```sh
-# 容器里那份的指纹
-jq -r .passToken data/credentials.json | tr -d '\n' | shasum -a 256
-```
-
-长度和 sha256 前 8 位都对得上、却还是 70016，那就是 token 真的过期了；对不上，就是抄错了。
-
-命令行传长 token 容易出事，建议走文件：
-
-```sh
-printf '%s' '<TOKEN>' > /tmp/pt && chmod 600 /tmp/pt
-MICAM_PASS_TOKEN_FILE=/tmp/pt ./micam --user-id 2255231260
-```
-
-`--user-id` 已经给了数字账号，就不会再追问账号名了。
-
-想降低风险，可以用小米的「设备共享」把摄像头共享给一个小号，用那个小号登录。
-
-## Docker（ARM fnOS）
-
-镜像由 GitHub Actions 构建，本机不需要 Docker：
-
-| 来源 | 地址 |
-|---|---|
-| Docker Hub | `hoshinosuzumi/micam-go` |
-| GHCR | `ghcr.io/<你的 GitHub 用户名>/micam-go` |
-
-```sh
-git clone <repo> micam && cd micam
-cp .env.example .env                     # 填 MICAM_USER / MICAM_REGION / MICAM_DID
-mkdir -p data secrets
-printf '%s' '<passToken>' > secrets/pass_token
-sudo chown -R 10001:10001 data                 # 容器以 uid 10001 运行
-sudo chown 10001:10001 secrets/pass_token      # 否则容器读不到 token
-sudo chmod 400 secrets/pass_token
-docker compose pull
-docker compose up -d
-docker compose logs -f
-```
-
-本地改代码调试时，把 compose 里的 `image:` 注释掉、取消 `build: .` 的注释，再
-`docker compose up -d --build`。
-
-镜像默认 `MICAM_BIND=0.0.0.0`、`HOME=/data`，凭据落在 `./data`。
-上游硬编码 `127.0.0.1` 的问题在这里不存在——Go 版直接监听可配置地址，不需要 socat。
-
-**默认用 host 网络，不是可选项。** LAN 直连靠 `255.255.255.255` 广播，Docker 的 bridge
-不会把它送到物理网段，摄像头收不到 `LAN_SEARCH` 就会**静默退回中继**——症状是"本机跑得通，
-容器里又变回中继"。host 模式不能同时写 `ports:`，8554 直接开在宿主机上。
-
-跨网段部署（VPS，或摄像头不在同一局域网）时改回 bridge：注释 `network_mode: host`、
-加回 `ports: ["8554:8554"]`、并设 `MICAM_LAN=off` 省掉必然失败的 3 秒广播等待。
-
-启动后确认走的是直连，而不是中继：
-
-```sh
-docker compose logs | grep -E "direct local session|connecting via"
-```
-
-### 应用界面（GUI）
-
-装好 fpk 之后，应用卡片打开的就是管理界面：改参数、启停服务、看连接状态和日志，
-都在这里，不用再去「应用设置」里改完等重启。
-
-![应用界面](docs/ui.png)
-
-- 前端是 **Svelte 5 + Tailwind**（shadcn/ui 的 token 与组件写法），构建产物约
-  **34 KB gzip**，由 `make web` 生成，不进仓库；
-- 它和「应用设置」写的是同一份 `etc/micam.env`，两边不会打架；
-- 会话缓存放在安装时自动创建的 `micam-go` 共享目录里（`config/resource` 的 `data-share`），
-  文件管理器里看得见，备份就是拷一个 `credentials.json`；
-- 后端是 `micam ctl`：挂在飞牛网关下的 CGI（`app/ui/index.cgi`），所以**不额外开端口**，
-  也自动继承了网关的登录态，不用自己造鉴权；
-- 连接状态、帧数、观众数来自 micam 每 2 秒原子重写的 `var/status.json`；
-- 「播放地址」会列出这台机器的每块网卡（`enp1s0`、`tailscale0`…）对应的地址，
-  选哪个，下面的 mpv / vlc / ffplay 命令就跟着换；点命令即复制。
-
-| 接口 | 作用 |
-|---|---|
-| `GET api/status` | 运行状态、会话/连接信息、帧率与观众数、当前配置 |
-| `GET api/log?lines=200` | `var/micam.log` 的尾部 |
-| `POST api/config` | 校验并写入配置，然后按新参数重启服务 |
-| `POST api/control` | `start` / `stop` / `restart`，统一走 `cmd/main` |
-
-### 从外面看（局域网 / Tailscale）
-
-流是普通 HTTP，地址就是 `http://<NAS 地址>:8554/cam.ts`。能打开的前提只有一个：micam
-监听在**非 loopback** 的地址上。启动日志会直接把可用的地址列出来：
-
-```
-  Listening on:  [::]:8554                    ← 双栈通配，等价于 0.0.0.0:8554
-  Local URL:     http://127.0.0.1:8554/cam.ts ← 只有 NAS 自己能打开
-  Reachable at:
-    http://192.168.0.5:8554/cam.ts            (enp1s0)
-    http://100.103.197.34:8554/cam.ts         (tailscale0)
-```
-
-（`[::]:8554` 能接 IPv4 的前提是 `net.ipv6.bindv6only=0`，Linux 默认如此。）
-fnOS 包里 `cmd/main` 会设 `MICAM_BIND=0.0.0.0`；界面「连接状态」里的**监听**一行显示的
-是内核实际绑定的地址——如果是 `127.0.0.1:8554`，就只有 NAS 自己能打开，界面会直接标黄。
-
-打不开时先分清是谁在报错，`curl` 比浏览器诚实：
-
-| 现象 | 说明 |
-|---|---|
-| `200` 然后一直吐二进制 | 正常 |
-| `502 Bad Gateway` | **链路上有一个 HTTP 代理**（tailscale serve、nginx、飞牛网关…），它连不上后端 |
-| `Connection refused` | 这个地址端口上没有进程在听 |
-| 一直卡住直到超时 | 防火墙或 Tailscale ACL 把包丢了 |
-
-502 最容易误判，因为 micam 从不产生 502：它要么 200 开始推流，要么直接被拒绝。三步定位：
-
-```sh
-# 1) 谁在监听 8554。可能不止一个：0.0.0.0 和某个具体 IP 可以同时存在
-sudo ss -ltnp | grep 8554
-
-# 2) 在 NAS 本机上分别打两个地址，绕开客户端
-curl -sI --max-time 3 http://127.0.0.1:8554/cam.ts
-curl -sI --max-time 3 "http://$(tailscale ip -4 | head -1):8554/cam.ts"
-
-# 3) tailscale 有没有在这个端口上做 serve / funnel
-tailscale serve status
-tailscale funnel status
-```
-
-第 2 步在本机返回 200、外部仍然 502，问题就在 NAS 之外（客户端代理、出口节点），
-和 micam 无关。
-
-**客户端自己的代理是常见来源，而且很像 NAS 坏了**：Clash/mihomo 的 TUN 模式会用
-`0.0.0.0/1` + `128.0.0.0/1` 抢默认路由，它自己的「直连」流量于是被自己的 TUN 再抓一次；
-对 Tailscale 的 `100.64.0.0/10` 就走成了一个圈，最终回 502。把这两个网段排除出隧道即可：
-
-```yaml
-tun:
-  route-exclude-address:
-    - 100.64.0.0/10
-    - fd7a:115c:a1e0::/48
-```
-
-判别方法：`curl -x http://127.0.0.1:7890 <地址>` 返回 502，而 `curl --noproxy '*' <地址>`
-返回 200，就是这一类。反过来，本机也 502，说明那个 IP:端口 上答话的不是 micam——`ss` 的输出
-会直接告诉你是谁。
-
-防火墙要在 fnOS 的「安全」里放行 8554（或对应的自定义端口），否则外部表现为超时。
-
-### 打包成 fnOS 应用（fpk）
-
-`packaging/fnos/` 是一套按飞牛规范写的应用包，**直接跑静态二进制，不用 Docker**：
-`cmd/main` 用 `setsid` 把服务放进独立会话，再原地看守它（micam 放弃重连时按退出码
-重新拉起），效果等同容器的 `restart: unless-stopped`，但没有镜像、没有端口映射。
-
-| 需求 | 由谁提供 |
-|---|---|
-| 配置 | 应用界面，或「应用设置」里的表单；两者写同一份文件，由 `micam write-config` 统一落盘 |
-| 启动 / 停止 / 状态 | 应用中心，由 `cmd/main` 的 `start`/`stop`/`status` 实现 |
-| 界面 | 应用卡片打开 `app/ui/index.cgi` → 静态文件走 CGI，`/api/*` 交给 `micam ctl` |
-| 二进制 | 打包时交叉编译进 `app/bin/micam`（`platform` 按架构写成 `x86` / `arm`） |
-
-```sh
-make web                        # 先构建界面（需要 Node 20+）
-make fpk                        # 出 amd64 与 arm64 两个包，会依赖 web
-make fpk ARCHS=amd64            # 只要 x86 的
-# 需要 fnpack：https://developer.fnnas.com/docs/cli/fnpack
-```
-
-产物是 `micam_<版本>_amd64.fpk` 与 `micam_<版本>_arm64.fpk`。因为包里是架构专属的
-可执行文件，`manifest` 的 `platform` 会跟着改；不要用 `all`。
-
-包结构、安装后的目录布局，以及几处**需要真机确认**的地方见
-[`packaging/fnos/README.md`](packaging/fnos/README.md)。
-
-### 发布新镜像
-
-### 发布
-
-三个工作流，除 CI 外都是**手动触发**：
-
-| 工作流 | 作用 | 怎么触发 |
-|---|---|---|
-| `ci` | gofmt / vet / test | 推 main 与 PR 时自动 |
-| `release` | 打 tag → 多架构镜像 → 推送；可选顺带打包 fpk | Actions → release → Run workflow |
-| `fpk` | 把某个 tag 打成 `.fpk` | Actions → fpk → Run workflow |
-
-**发版**：Actions → `release` → Run workflow，填版本号（如 `0.6.2`）。工作流会
-
-1. 把 `packaging/fnos/manifest` 和 `web/package.json` 里的版本号写成这个版本，提交成
-   `chore: release 0.6.2` 并推回分支（推不上去就跳过，不影响发布）；
-2. 在自己刚提交的那个提交上创建并推送 `v0.6.2`；
-3. 所有后续构建都 checkout 这个 tag，并把去掉 `v` 的版本号注入二进制。
-
-版本号**只有 tag 一个来源**：`micam --version` 和界面上的版本是编译期用
-`-ldflags -X micam/internal/cli.Version=…` 写进去的，`manifest` 在打包时由
-`packaging/build-fpk.sh` 写成同一个值。仓库里没有"需要手动改的版本常量"，也就不会再出现
-「0.6.2 的包带着 0.5.0 的二进制」。`make build` 走 `scripts/version.sh`，本地构建显示的是
-`git describe` 的结果（例如 `0.6.2-3-gabc1234`，脏工作区再带 `-dirty`）。
-
-tag 已存在会直接失败，避免覆盖。
-
-三个可选开关：
-
-| 输入 | 默认 | 作用 |
-|---|---|---|
-| `latest` | 开 | 是否同时把 `latest` 指向这个版本 |
-| `fpk` | 开 | 发布完成后自动打包 fnOS 应用包 |
-| `draft` | 开 | GitHub Release 建成草稿，检查过产物再手动发布 |
-
-**产物都挂在 GitHub Release 上**：`micam-linux-arm64`、`micam-linux-amd64`，勾了 `fpk`
-时还有 `micam_<版本>_amd64.fpk` 与 `micam_<版本>_arm64.fpk`。草稿只影响 Release 的可见性，镜像和 tag 都是正常发布的。
-
-**只打包 fpk**：Actions → `fpk` → Run workflow。tag 留空表示用最新的 tag，也可以填指定
-版本；它**只读仓库、不会打 tag**，产物同样挂到对应 tag 的 Release（没有就新建一个草稿）。
-
-产物在工作流的 Artifacts 里：`micam-binaries-<版本>`（两个架构的静态二进制，不装 Docker
-也能 `scp` 到 NAS 跑）和 `micam-fpk-<版本>`（fnOS 安装包）。
-
-GHCR 只需要 `GITHUB_TOKEN`，无需配置。要同时推 Docker Hub，在仓库
-**Settings → Secrets and variables → Actions** 里加：
-
-| Secret | 值 |
-|---|---|
-| `DOCKERHUB_USERNAME` | Docker Hub 用户名（小写） |
-| `DOCKERHUB_TOKEN` | Account Settings 里创建的 Access Token（Read & Write） |
-
-没有这两个 secret 时，工作流只推 GHCR，不会失败。
-
-⚠️ 这个流**没有任何鉴权**。只把它发布在可信网段，或前面挂一层带认证的反代。
-
-## 真机验证记录
-
-| 日期 | 环境 | 结果 |
-|---|---|---|
-| 2026-11-17 | `xiaomi.camera.92ac1`（H.265 2304×1296），经 CS2 中继 | 连续播放稳定；PTS 单调，PCR 落后 PTS；全程无转码 |
-| 2026-11-17 | 同一摄像头，**局域网直连**（`cs2+tcp`） | 广播发现 → UID 认领 → TCP 会话建立，媒体不走中继 |
-| 2026-11-17 | 全流程，`--quality 3 --pts-lead 100` | 画面与米家 App 相当，延迟明显下降；`resyncs=0` |
-
-覆盖的完整链路：真实账号登录 → `device_list` → `miss_get_vendor` → 中继/局域网建链 →
-MISS 认证 → 媒体解密 → TS 复用 → HTTP 分发 → PotPlayer / VLC / ffplay 出画。
-
-两条实测结论已固化进 `8.6` 节：这个型号**只回应广播搜索**（单播被忽略），并且
-**只提供 TCP 会话**（回 `P2P_RDY_TCP`）。后者是 `Link` 抽象存在的原因——同一条
-MISS/DRW 逻辑要能跑在两种传输上。
-
-关于 `[hevc] Could not find ref with POC` 这类解码器报错：用 `--dump` 抓原始码流、
-再用 `ffmpeg -f null` 离线解码，两者都是零错误，所以那是播放器**自己丢帧**（软件解码
-2K H.265 跟不上），不是流的问题。判别方法见「画面与延迟」一节。
-
-## 为什么值得有它
-
-上游测试里的向量来自独立参考实现与真机抓包，是复刻的唯一硬证据。
-把它固化成语料 + 一个不同语言的校验器，任何后续实现（Go、Rust）都可以在**没有摄像头**
-的情况下先证明自己是对的。
-
-## 与上游的差异
-
-协议层零差异。部署面有意改进：
-
-| 项 | 上游 | 本实现 |
-|---|---|---|
-| 监听地址 | 硬编码 `127.0.0.1` | `--bind`，默认仍 `127.0.0.1` |
-| 凭据来源 | 交互 + 文件 | 增加 env / token 文件 |
-| 凭据目录 | JVM `user.home` | Go 的 `$HOME`（容器里可直接挂卷） |
-| 日志 | stdout 文本 | `slog`，`--verbose` 切换 Debug |
-| 区域默认值 | `ru` | `cn`（目标部署在国内） |
+协议细节看 `docs/PROTOCOL.md`，实现取舍看 `docs/DESIGN.md`。
 
 ## 许可
 
-上游仓库未附 LICENSE（默认保留所有权利）。本目录是供私人研究/自用重写的笔记与代码，
-若要分发镜像或衍生作品，请先与上游作者确认。
+上游仓库未附 LICENSE（默认保留所有权利）。本仓库是自用重写的实现与笔记；分发镜像或
+衍生作品前，请先与上游作者确认。
