@@ -101,7 +101,7 @@
 
   {#if data}
     <StatusCard app={data.app} />
-    <PlayerCard {url} />
+    <PlayerCard {url} endpoints={data.app.urls ?? []} />
     <ConfigCard
       config={data.config}
       onSaved={(result) => {

@@ -1,17 +1,75 @@
 <script lang="ts">
-  import { Button, Card, CardContent, CardHeader, CardTitle } from "./ui";
+  import { untrack } from "svelte";
+  import type { StreamURL } from "$lib/api";
+  import { copyText } from "$lib/clipboard";
+  import { Button, Card, CardContent, CardHeader, CardTitle, Select } from "./ui";
 
-  let { url }: { url: string } = $props();
-  let copied = $state(false);
+  let {
+    url,
+    endpoints = [],
+  }: { url: string; endpoints?: StreamURL[] } = $props();
 
-  async function copy() {
+  // Which row was copied last, so the feedback lands where the click did.
+  let copied = $state<string | null>(null);
+  let failed = $state<string | null>(null);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  // The address the page was opened with is the right default: it is the one that
+  // is demonstrably reachable from wherever the user is sitting.
+  // A malformed URL from the status file must not take the page down.
+  function hostOf(value: string): string {
     try {
-      await navigator.clipboard.writeText(url);
-      copied = true;
+      return new URL(value).hostname;
     } catch {
-      copied = false;
+      return value;
     }
-    setTimeout(() => (copied = false), 1500);
+  }
+
+  const options = $derived.by(() => {
+    const list = [{ value: url, label: "当前页面", iface: "" }];
+    const seen = new Set([url]);
+
+    for (const endpoint of endpoints) {
+      if (!endpoint.url || seen.has(endpoint.url)) continue;
+      seen.add(endpoint.url);
+      list.push({
+        value: endpoint.url,
+        label: endpoint.iface || hostOf(endpoint.url),
+        iface: endpoint.iface ?? "",
+      });
+    }
+    return list;
+  });
+
+  let selected = $state(untrack(() => url));
+  const active = $derived(
+    options.some((option) => option.value === selected) ? selected : options[0].value,
+  );
+
+  // The chosen interface can disappear (Tailscale down, cable pulled); fall back
+  // instead of showing a URL that no longer exists.
+  $effect(() => {
+    if (!options.some((option) => option.value === selected)) {
+      selected = options[0].value;
+    }
+  });
+
+  const commands = $derived([
+    { id: "mpv", text: `mpv --hwdec=auto ${active}` },
+    { id: "vlc", text: `vlc ${active}` },
+    { id: "ffplay", text: `ffplay -fflags nobuffer ${active}` },
+  ]);
+
+  async function copy(id: string, text: string) {
+    const ok = await copyText(text);
+    copied = ok ? id : null;
+    failed = ok ? null : id;
+
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      copied = null;
+      failed = null;
+    }, 1600);
   }
 </script>
 
@@ -22,18 +80,51 @@
       没有鉴权，只适合可信网段；外网请走 Tailscale 或带认证的反向代理。
     </p>
   </CardHeader>
-  <CardContent class="space-y-3">
-    <div class="flex gap-2">
+
+  <CardContent class="space-y-4">
+    <div class="flex flex-wrap gap-2">
       <code
-        class="min-w-0 flex-1 truncate rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs"
-        >{url}</code
+        class="min-w-0 flex-1 basis-64 truncate rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs"
+        title={active}>{active}</code
       >
-      <Button variant="outline" size="sm" onclick={copy} class="h-9">
-        {copied ? "已复制" : "复制"}
+
+      {#if options.length > 1}
+        <div class="w-40 shrink-0">
+          <Select bind:value={selected} aria-label="播放地址使用的网卡">
+            {#each options as option (option.value)}
+              <option value={option.value}>{option.label}</option>
+            {/each}
+          </Select>
+        </div>
+      {/if}
+
+      <Button
+        variant="outline"
+        size="sm"
+        class="h-9 shrink-0"
+        onclick={() => copy("url", active)}
+      >
+        {copied === "url" ? "已复制" : failed === "url" ? "复制失败" : "复制"}
       </Button>
     </div>
-    <p class="font-mono text-[11px] text-muted-foreground">
-      mpv --hwdec=auto {url}
-    </p>
+
+    <div class="space-y-1">
+      <p class="text-[11px] tracking-wide text-muted-foreground uppercase">点一下复制命令</p>
+      {#each commands as command (command.id)}
+        <button
+          type="button"
+          onclick={() => copy(command.id, command.text)}
+          title={command.text}
+          class="-mx-2 block w-[calc(100%+1rem)] cursor-pointer truncate rounded-md px-2 py-1 text-left font-mono text-[11px] text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground hover:underline hover:decoration-dotted hover:underline-offset-4"
+        >
+          {command.text}
+          {#if copied === command.id}
+            <span class="ml-2 text-emerald-600 dark:text-emerald-400">已复制</span>
+          {:else if failed === command.id}
+            <span class="ml-2 text-destructive">复制失败，请手动选中</span>
+          {/if}
+        </button>
+      {/each}
+    </div>
   </CardContent>
 </Card>

@@ -257,7 +257,12 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 	}
 	defer server.Close()
 
-	rep.Bind(server.Addr())
+	reachable := server.ReachableURLs()
+	endpoints := make([]status.StreamURL, 0, len(reachable))
+	for _, u := range reachable {
+		endpoints = append(endpoints, status.StreamURL{URL: u.URL, Iface: u.Iface})
+	}
+	rep.Bind(server.Addr(), endpoints)
 
 	if showBanner {
 		fmt.Println()
@@ -266,7 +271,6 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 
 		// The addresses a player elsewhere can use. "127.0.0.1" is true and
 		// useless; the wildcard the process bound to is not a URL at all.
-		reachable := server.ReachableURLs()
 		if len(reachable) > 0 {
 			fmt.Println()
 			fmt.Println("  Reachable at:")

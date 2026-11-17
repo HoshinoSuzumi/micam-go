@@ -10,6 +10,11 @@ export type StreamState =
   | "stopped"
   | "error";
 
+export interface StreamURL {
+  url: string;
+  iface?: string;
+}
+
 export interface AppStatus {
   name: string;
   version: string;
@@ -22,6 +27,8 @@ export interface AppStatus {
   codec?: string;
   /** bind is where the HTTP stream listens; a 127.x address is local-only. */
   bind?: string;
+  /** urls are the addresses another machine can use, one per interface. */
+  urls?: StreamURL[];
   frames: number;
   fps: number;
   viewers: number;

@@ -294,7 +294,9 @@ docker compose logs | grep -E "direct local session|connecting via"
 - 它和「应用设置」写的是同一份 `etc/micam.env`，两边不会打架；
 - 后端是 `micam ctl`：挂在飞牛网关下的 CGI（`app/ui/index.cgi`），所以**不额外开端口**，
   也自动继承了网关的登录态，不用自己造鉴权；
-- 连接状态、帧数、观众数来自 micam 每 2 秒原子重写的 `var/status.json`。
+- 连接状态、帧数、观众数来自 micam 每 2 秒原子重写的 `var/status.json`；
+- 「播放地址」会列出这台机器的每块网卡（`enp1s0`、`tailscale0`…）对应的地址，
+  选哪个，下面的 mpv / vlc / ffplay 命令就跟着换；点命令即复制。
 
 | 接口 | 作用 |
 |---|---|
