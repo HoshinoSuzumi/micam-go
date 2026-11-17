@@ -184,12 +184,12 @@ func buildFragment(sequence uint32, baseTime uint64, samples []fragmentSample) [
 	tfdt := fullBox("tfdt", 1, 0, u64(baseTime))
 
 	trun := buildTrun(samples, 0)
-	moof := box("moof", mfhd, tfhd, tfdt, trun)
+	moof := box("moof", mfhd, box("traf", tfhd, tfdt, trun))
 
 	// The data offset is relative to the start of the moof box, and the mdat
 	// header sits between them. Rebuilding is cheap: the size does not change.
 	trun = buildTrun(samples, uint32(len(moof))+8)
-	moof = box("moof", mfhd, tfhd, tfdt, trun)
+	moof = box("moof", mfhd, box("traf", tfhd, tfdt, trun))
 
 	var payload []byte
 	for _, s := range samples {
