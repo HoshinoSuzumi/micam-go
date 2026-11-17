@@ -88,8 +88,12 @@ func TestSegmentIsClosedByTheNextKeyframe(t *testing.T) {
 	if !ok {
 		t.Fatal("segment 0 is missing")
 	}
-	if got := boxType(data, 0); got != "moof" {
-		t.Fatalf("segment starts with %q, want moof", got)
+	// CMAF: a segment type box, then the fragment itself.
+	if got := boxType(data, 0); got != "styp" {
+		t.Fatalf("segment starts with %q, want styp", got)
+	}
+	if got := boxType(data, stypLen); got != "moof" {
+		t.Fatalf("segment has %q after styp, want moof", got)
 	}
 
 	// Two seconds of video, allowing for the frame that closed the segment.

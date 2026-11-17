@@ -154,18 +154,18 @@ func (s *Segmenter) ready() bool {
 }
 
 // buildSample turns the picture NALs of one access unit into a length-prefixed
-// sample. fMP4 stores NALs length-prefixed, not with Annex-B start codes, and the
-// parameter sets live in the init segment rather than in every sample.
+// sample. fMP4 stores NALs length-prefixed, not with Annex-B start codes.
+//
+// The parameter sets stay in the sample even though the init segment carries
+// them in hvcC as well: the sample entry is hev1, which allows in-band parameter
+// sets, and the Windows decoders behind Edge and Chrome are happier when every
+// keyframe can be decoded on its own.
 func buildSample(nals [][]byte) ([]byte, bool) {
 	var out []byte
 	hasPicture := false
 
 	for _, nal := range nals {
-		t := nalType(nal)
-		if isParamSet(t) {
-			continue
-		}
-		if isVCL(t) {
+		if isVCL(nalType(nal)) {
 			hasPicture = true
 		}
 		out = binary.BigEndian.AppendUint32(out, uint32(len(nal)))

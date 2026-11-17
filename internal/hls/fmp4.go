@@ -129,7 +129,7 @@ func buildVisualSampleEntry(info spsInfo, ps paramSets) []byte {
 	entry = append(entry, u16(0x0018)...)      // depth
 	entry = append(entry, 0xFF, 0xFF)          // pre_defined = -1
 
-	return box("hvc1", append(entry, buildHvcC(info, ps)...))
+	return box("hev1", append(entry, buildHvcC(info, ps)...))
 }
 
 // buildHvcC is ISO/IEC 14496-15 §8.3.3.1: the decoder configuration record that
@@ -196,7 +196,15 @@ func buildFragment(sequence uint32, baseTime uint64, samples []fragmentSample) [
 		payload = append(payload, s.data...)
 	}
 
-	return append(moof, box("mdat", payload)...)
+	// CMAF segments start with a segment type box. Players that expect it are
+	// usually tolerant, but the cost is 24 bytes and it removes a difference from
+	// the output ffmpeg produces, which is the shape browsers are tested against.
+	styp := box("styp",
+		[]byte("iso5"), u32(0),
+		[]byte("iso5"), []byte("iso6"), []byte("mp41"),
+	)
+
+	return append(append(styp, moof...), box("mdat", payload)...)
 }
 
 func buildTrun(samples []fragmentSample, dataOffset uint32) []byte {

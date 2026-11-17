@@ -15,6 +15,10 @@ const (
 	nalTypeCRA      = 21
 	nalTypeRsvIRAP  = 23
 
+	// stypLen is the size of the segment type box written before each fragment:
+	// 8-byte header, major brand, minor version, three compatible brands.
+	stypLen = 28
+
 	nalTypeVPS = 32
 	nalTypeSPS = 33
 	nalTypePPS = 34

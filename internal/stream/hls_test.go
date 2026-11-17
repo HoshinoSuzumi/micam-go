@@ -123,8 +123,9 @@ func TestHLSPlaylistAndSegments(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("segment returned %d", resp.StatusCode)
 	}
-	if len(seg) < 8 || string(seg[4:8]) != "moof" {
-		t.Fatalf("segment does not start with moof: %x", seg[:min(8, len(seg))])
+	// CMAF segments start with styp, then the moof.
+	if len(seg) < 36 || string(seg[4:8]) != "styp" || string(seg[32:36]) != "moof" {
+		t.Fatalf("segment is not styp+moof: %x", seg[:min(36, len(seg))])
 	}
 }
 
