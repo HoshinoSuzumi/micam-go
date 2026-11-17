@@ -231,8 +231,11 @@ jobs:
 
   fpk:
     # 复用 fpk 工作流：比跨工作流 dispatch 可靠，不需要额外 token 权限。
-    # 排在 release 之后，保证 fpk 上传时 release 已经存在。
-    needs: [prepare, image, release]
+    #
+    # 包里是编译好的二进制，不再引用镜像 tag，所以不必等 image —— 它和镜像推送
+    # 并行跑。只保留 release：fpk 要往 release 上挂资产，而且 release 为空时它会
+    # 建一个草稿，那会把 draft: false 的发布悄悄降级成草稿。
+    needs: [prepare, release]
     if: ${{ inputs.fpk }}
     uses: ./.github/workflows/fpk.yml
     with:
