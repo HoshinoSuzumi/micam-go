@@ -250,8 +250,18 @@ func (s *Server) Close() error {
 }
 
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", "GET")
+	switch r.Method {
+	case http.MethodGet:
+		// the normal case, handled below
+	case http.MethodHead:
+		// Players and proxies probe with HEAD before opening a stream, and a 405
+		// here reads like "the server is broken" when the stream is fine.
+		w.Header().Set("Content-Type", "video/mp2t")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		return
+	default:
+		w.Header().Set("Allow", "GET, HEAD")
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}

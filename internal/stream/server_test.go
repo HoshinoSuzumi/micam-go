@@ -305,3 +305,46 @@ func TestReachableURLsAreEmptyForALoopbackListener(t *testing.T) {
 		t.Fatalf("a loopback listener must advertise nothing, got %+v", got)
 	}
 }
+
+// HEAD is what players and proxies use to probe before opening a stream. Answering
+// 405 made a perfectly healthy server look broken during a debugging session.
+func TestHeadIsAllowed(t *testing.T) {
+	server := startServer(t)
+
+	response, err := http.Head(server.URL())
+	if err != nil {
+		t.Fatalf("HEAD: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.StatusCode)
+	}
+	if got := response.Header.Get("Content-Type"); got != "video/mp2t" {
+		t.Fatalf("content-type = %q", got)
+	}
+	if response.ContentLength > 0 {
+		t.Fatalf("HEAD must not claim a body, got %d bytes", response.ContentLength)
+	}
+}
+
+func TestOtherMethodsAreRejected(t *testing.T) {
+	server := startServer(t)
+
+	request, err := http.NewRequest(http.MethodPost, server.URL(), nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", response.StatusCode)
+	}
+	if allow := response.Header.Get("Allow"); !strings.Contains(allow, "HEAD") {
+		t.Fatalf("Allow = %q, want it to mention HEAD", allow)
+	}
+}
