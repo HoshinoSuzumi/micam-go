@@ -15,6 +15,7 @@ import (
 	"micam/internal/cli"
 	"micam/internal/cloud"
 	"micam/internal/creds"
+	"micam/internal/status"
 )
 
 // Exit codes mirror the upstream tool so scripts keep working.
@@ -33,6 +34,18 @@ func main() {
 }
 
 func run(args []string) int {
+	// Hidden subcommands. "ctl" is the CGI the fnOS app UI talks to; "write-config"
+	// lets the configuration wizard reuse the same writer as the UI, so the two
+	// entry points cannot disagree about the file format.
+	if len(args) > 0 {
+		switch args[0] {
+		case "ctl":
+			return runCtl()
+		case "write-config":
+			return runWriteConfig()
+		}
+	}
+
 	opts, err := cli.Parse(args)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -159,7 +172,10 @@ func serve(ctx context.Context, opts *cli.Options, log *slog.Logger) int {
 		return exitOffline
 	}
 
-	return runCamera(ctx, opts, client, target, log)
+	reporter := status.Open(opts.StatusFile, log)
+	defer reporter.Close()
+
+	return runCamera(ctx, opts, client, target, reporter, log)
 }
 
 func authenticate(ctx context.Context, client *cloud.Client, opts *cli.Options,

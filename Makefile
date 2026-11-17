@@ -6,7 +6,7 @@ BIN ?= micam
 IMAGE ?= hoshinosuzumi/micam-go
 TAG ?= dev
 
-.PHONY: fmt vet test build cross docker docker-push docker-push-multi fpk clean
+.PHONY: fmt vet test build cross web docker docker-push docker-push-multi fpk clean
 
 fmt:
 	gofmt -w .
@@ -42,16 +42,21 @@ docker-push-multi:
 	docker buildx build --platform linux/amd64,linux/arm64 \
 		-t $(IMAGE):$(TAG) -t $(IMAGE):latest --push .
 
+# Build the management UI. It is a build product, so it never lives in the tree.
+web:
+	@test -d web/node_modules || (cd web && npm ci --no-audit --no-fund)
+	cd web && npm run build
+
 # Build the fnOS application package(s). Needs fnpack:
 # https://developer.fnnas.com/docs/cli/fnpack
 #
 # 服务是静态二进制，所以每种架构一个包：make fpk ARCHS=amd64 只出 x86 的。
 ARCHS ?= amd64 arm64
-fpk:
+fpk: web
 	@command -v fnpack >/dev/null 2>&1 || { \
 		echo "fnpack not found - download it from https://developer.fnnas.com/docs/cli/fnpack"; \
 		exit 1; }
 	@for arch in $(ARCHS); do ./packaging/build-fpk.sh $$arch || exit 1; done
 
 clean:
-	rm -rf bin
+	rm -rf bin .tmp/fpk-* web/dist

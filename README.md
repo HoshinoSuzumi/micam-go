@@ -282,6 +282,27 @@ docker compose logs -f
 docker compose logs | grep -E "direct local session|connecting via"
 ```
 
+### 应用界面（GUI）
+
+装好 fpk 之后，应用卡片打开的就是管理界面：改参数、启停服务、看连接状态和日志，
+都在这里，不用再去「应用设置」里改完等重启。
+
+![应用界面](docs/ui.png)
+
+- 前端是 **Svelte 5 + Tailwind**（shadcn/ui 的 token 与组件写法），构建产物约
+  **34 KB gzip**，由 `make web` 生成，不进仓库；
+- 它和「应用设置」写的是同一份 `etc/micam.env`，两边不会打架；
+- 后端是 `micam ctl`：挂在飞牛网关下的 CGI（`app/ui/index.cgi`），所以**不额外开端口**，
+  也自动继承了网关的登录态，不用自己造鉴权；
+- 连接状态、帧数、观众数来自 micam 每 2 秒原子重写的 `var/status.json`。
+
+| 接口 | 作用 |
+|---|---|
+| `GET api/status` | 运行状态、会话/连接信息、帧率与观众数、当前配置 |
+| `GET api/log?lines=200` | `var/micam.log` 的尾部 |
+| `POST api/config` | 校验并写入配置，然后按新参数重启服务 |
+| `POST api/control` | `start` / `stop` / `restart`，统一走 `cmd/main` |
+
 ### 打包成 fnOS 应用（fpk）
 
 `packaging/fnos/` 是一套按飞牛规范写的应用包，**直接跑静态二进制，不用 Docker**：
@@ -290,13 +311,14 @@ docker compose logs | grep -E "direct local session|connecting via"
 
 | 需求 | 由谁提供 |
 |---|---|
-| 配置 | 「应用设置」里的表单（`wizard/config`）：账号、userId、passToken、DID、清晰度、连接方式 |
+| 配置 | 应用界面，或「应用设置」里的表单；两者写同一份文件，由 `micam write-config` 统一落盘 |
 | 启动 / 停止 / 状态 | 应用中心，由 `cmd/main` 的 `start`/`stop`/`status` 实现 |
-| 界面 | 应用卡片打开 `app/www/index.html`，走 CGI，不额外占端口 |
+| 界面 | 应用卡片打开 `app/ui/index.cgi` → 静态文件走 CGI，`/api/*` 交给 `micam ctl` |
 | 二进制 | 打包时交叉编译进 `app/bin/micam`（`platform` 按架构写成 `x86` / `arm`） |
 
 ```sh
-make fpk                        # 出 amd64 与 arm64 两个包
+make web                        # 先构建界面（需要 Node 20+）
+make fpk                        # 出 amd64 与 arm64 两个包，会依赖 web
 make fpk ARCHS=amd64            # 只要 x86 的
 # 需要 fnpack：https://developer.fnnas.com/docs/cli/fnpack
 ```

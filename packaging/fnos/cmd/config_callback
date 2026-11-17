@@ -1,7 +1,8 @@
 #!/bin/sh
-# 配置变更后：把向导收集到的值写成 env 文件与 token 文件，再重启服务。
+# 配置变更后：把向导收集到的值写成配置文件，再重启服务。
 #
-# 只写"用户可配置"的值。监听地址、端口、token 路径、数据目录由 cmd/main 决定。
+# 文件格式（包括引号转义）只在 micam 里实现一次：界面走 /api/config，向导走
+# write-config，两条路写出来的字节完全一样。
 #
 # 向导值来自同名字段：wizard_user / wizard_user_id / wizard_region /
 # wizard_did / wizard_quality / wizard_lan / wizard_pts_lead / wizard_pass_token。
@@ -10,25 +11,16 @@ set -eu
 APP="${TRIM_APPNAME:-micam}"
 PKGETC="${TRIM_PKGETC:-/var/apps/$APP/etc}"
 PKGVAR="${TRIM_PKGVAR:-/var/apps/$APP/var}"
+BIN="${TRIM_APPDEST:-/var/apps/$APP/target}/bin/micam"
 HERE=$(cd "$(dirname "$0")" && pwd)
 
-mkdir -p "$PKGETC" "$PKGVAR"
-umask 077
+if ! "$BIN" write-config; then
+    echo "配置校验失败，没有写入。检查 userId 是否为纯数字、DID 是否正确。" \
+        >>"${TRIM_TEMP_LOGFILE:-/dev/null}"
+    exit 1
+fi
 
-cat >"$PKGETC/micam.env" <<ENVEOF
-MICAM_USER=${wizard_user:-}
-MICAM_USER_ID=${wizard_user_id:-}
-MICAM_REGION=${wizard_region:-cn}
-MICAM_DID=${wizard_did:-}
-MICAM_QUALITY=${wizard_quality:-3}
-MICAM_PTS_LEAD=${wizard_pts_lead:-100}
-MICAM_LAN=${wizard_lan:-prefer}
-MICAM_RECONNECT=5
-ENVEOF
-chmod 600 "$PKGETC/micam.env"
-
-printf '%s' "${wizard_pass_token:-}" >"$PKGETC/pass_token"
-chmod 600 "$PKGETC/pass_token"
+chmod 600 "$PKGETC/micam.env" "$PKGETC/pass_token" 2>/dev/null || true
 
 if [ "$(id -u)" = 0 ] && [ -n "${TRIM_UID:-}" ]; then
     chown "$TRIM_UID:${TRIM_GID:-$TRIM_UID}" "$PKGETC/micam.env" "$PKGETC/pass_token" 2>/dev/null || true

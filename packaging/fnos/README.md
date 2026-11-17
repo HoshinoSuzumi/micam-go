@@ -12,9 +12,9 @@ wizard/config                「应用设置」里的配置表单
 cmd/main                     start / stop / status，兼看守循环
 cmd/install_* upgrade_* uninstall_* config_*   生命周期脚本
 app/bin/micam                打包时交叉编译进来的静态二进制（不入库）
+app/www/                     管理界面，make web 的产物（不入库）
 app/ui/config                桌面入口（iframe 指向 index.cgi）
-app/ui/index.cgi             静态文件 CGI，不需要额外端口
-app/www/index.html           应用界面：播放地址与用法
+app/ui/index.cgi             静态文件 + /api/* 转发给 micam ctl
 ```
 
 ## 为什么不用 Docker 模板
@@ -31,9 +31,22 @@ fnpack 的 docker 模板解决的是"应用由多个容器组成、需要受控�
 代价：包里是**架构专属**的可执行文件，所以 `platform` 必须是 `x86` 或 `arm`，两种架构
 各出一个包（`packaging/build-fpk.sh` 负责）。
 
+## 管理界面
+
+应用卡片打开的是 `app/ui/index.cgi`：静态文件从 `app/www/` 出，`/api/*` 直接
+`exec app/bin/micam ctl`。这样界面和 API 都在飞牛网关下面，**不额外开端口**，也不需要
+自己做鉴权。
+
+`micam ctl` 每次请求起一个进程（约 20 ms），读 `etc/micam.env`、`var/status.json`、
+`var/micam.log`，控制动作则转给 `cmd/main`，所以界面和「应用中心」永远不会对"服务是
+怎么跑的"有两种说法。
+
+界面源码在 `web/`（Svelte 5 + Tailwind），产物不提交，构建时复制进包里。
+
 ## 构建
 
 ```sh
+make web                 # 构建界面（Node 20+）
 make fpk                 # amd64 + arm64
 make fpk ARCHS=arm64     # 只要 ARM 的
 ```
@@ -103,3 +116,12 @@ cmd/main start
 - 服务以包用户运行（root 执行脚本时也会降权），不需要任何特权；
 - 流本身**没有鉴权**，只应在可信网段使用；
 - 不声明共享目录，应用数据留在 `var/` 里。
+
+## 状态文件
+
+micam 每 2 秒把状态原子重写到 `var/status.json`（先写 `.tmp` 再 rename，读到的永远是
+完整文档）：状态、会话号、摄像头、传输方式、编码、帧数、帧率、观众数、重同步次数、
+开始时间、最后的错误。界面轮询的就是它。
+
+进程没在跑时，`micam ctl` 会用 pidfile 判断，把状态显示成"已停止"，同时保留最后一条
+错误——这正是"为什么停了"的答案。

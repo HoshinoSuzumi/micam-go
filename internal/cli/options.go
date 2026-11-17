@@ -38,6 +38,7 @@ type Options struct {
 	LAN            string
 	Dump           string
 	DumpSeconds    int
+	StatusFile     string
 }
 
 // Values for --lan.
@@ -95,6 +96,8 @@ func Parse(args []string) (*Options, error) {
 		"retry the stream this many times when it ends (0 disables)")
 	fs.StringVar(&opts.LAN, "lan", envOr("MICAM_LAN", LANPrefer),
 		"prefer|only|off: try a direct local-network session before the relay")
+	fs.StringVar(&opts.StatusFile, "status-file", envOr("MICAM_STATUS_FILE", ""),
+		"publish the stream state to this JSON file, for the management UI")
 	fs.StringVar(&opts.Dump, "dump", "",
 		"write the raw elementary stream to this file instead of serving it")
 	fs.IntVar(&opts.DumpSeconds, "dump-seconds", 5,

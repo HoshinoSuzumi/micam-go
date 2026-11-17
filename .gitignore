@@ -25,3 +25,8 @@
 # fpk build output
 /packaging/fnos/app/bin/
 /micam_*.fpk
+
+# management UI build output
+/web/node_modules/
+/web/dist/
+/web/.tmp/

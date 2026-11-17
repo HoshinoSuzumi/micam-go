@@ -15,6 +15,7 @@ import (
 	"micam/internal/cloud"
 	"micam/internal/miss"
 	"micam/internal/pppp"
+	"micam/internal/status"
 	"micam/internal/stream"
 )
 
@@ -39,16 +40,23 @@ const provisionTimeout = 15 * time.Second
 // reconnects gets a fresh transport stream starting at a keyframe, rather than a
 // PTS discontinuity in the middle of one.
 func runCamera(ctx context.Context, opts *cli.Options, client *cloud.Client,
-	target cloud.Device, log *slog.Logger) int {
+	target cloud.Device, rep *status.Reporter, log *slog.Logger) int {
 
 	pacer := &retryPacer{max: opts.Reconnect}
 	bannerShown := false
+	session := 0
 
 	for {
-		out := streamSession(ctx, opts, client, target, !bannerShown, log)
+		session++
+		out := streamSession(ctx, opts, client, target, session, !bannerShown, rep, log)
 		bannerShown = bannerShown || out.streaming
 
-		if ctx.Err() != nil || !out.retryable {
+		if ctx.Err() != nil {
+			rep.SetState(status.StateStopped, nil)
+			return out.code
+		}
+		if !out.retryable {
+			rep.SetState(status.StateError, out.err)
 			return out.code
 		}
 
@@ -57,8 +65,10 @@ func runCamera(ctx context.Context, opts *cli.Options, client *cloud.Client,
 			if opts.Reconnect > 0 {
 				log.Error("giving up", "attempts", pacer.attempt, "max", opts.Reconnect+1)
 			}
+			rep.SetState(status.StateError, out.err)
 			return out.code
 		}
+		rep.SetState(status.StateRetrying, out.err)
 
 		switch {
 		case out.cloud:
@@ -154,7 +164,11 @@ func (o outcome) healthy() bool {
 // serve. Everything it opens is released by its own defers, so a retry starts
 // from a clean slate.
 func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
-	target cloud.Device, showBanner bool, log *slog.Logger) outcome {
+	target cloud.Device, session int, showBanner bool, rep *status.Reporter,
+	log *slog.Logger) outcome {
+
+	rep.BeginSession(session)
+	rep.SetState(status.StateConnecting, nil)
 
 	keys, err := miss.GenerateKeys()
 	if err != nil {
@@ -186,6 +200,8 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 		log.Error("cannot reach the camera", "err", err)
 		return outcome{code: exitSession, retryable: true, err: err}
 	}
+
+	rep.Connected(target.Name, link.Describe())
 
 	conn := pppp.NewConn(link, local, log)
 	conn.Start()
@@ -276,6 +292,11 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 		}
 		server.Publish(packet)
 		frames++
+		if frames == 1 {
+			rep.SetState(status.StateStreaming, nil)
+		}
+		rep.Frame(packet.CodecName())
+		rep.Sample(server.Viewers(), server.Resyncs())
 		if frames%600 == 0 {
 			log.Info("relaying", "frames", frames, "viewers", server.Viewers(),
 				"resyncs", server.Resyncs(), "codec", packet.CodecName())

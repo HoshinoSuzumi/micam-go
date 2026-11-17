@@ -50,6 +50,16 @@ CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" \
     go build -trimpath -ldflags="-s -w" \
     -o "$BUILD/app/bin/micam" "$ROOT/cmd/micam"
 
+# 界面是构建产物，不进仓库：没有就先构建，别打出一个没有 UI 的包。
+WEB="$ROOT/web/dist"
+if [ ! -f "$WEB/index.html" ]; then
+    echo "还没有构建界面，先跑：make web" >&2
+    exit 1
+fi
+rm -rf "$BUILD/app/www"
+mkdir -p "$BUILD/app/www"
+cp -R "$WEB/." "$BUILD/app/www/"
+
 # platform 按架构改写；sed -i.bak 在 GNU 和 BSD 上都能用。
 sed -i.bak "s|^platform=.*|platform=\"$PLATFORM\"|" "$BUILD/manifest"
 rm -f "$BUILD/manifest.bak"
