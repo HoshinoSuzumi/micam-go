@@ -124,6 +124,7 @@ docker compose pull && docker compose up -d
   `credentials.json`
 - 「播放地址」按网卡列出可选地址（`enp1s0`、`tailscale0`…），选中后下面的 mpv / vlc /
   ffplay 命令跟着换，点一下即复制
+- 同一个网卡选的地址下面还给出 **HLS 播放列表**地址，Safari 和 iPhone 用这一条
 - 界面和 API 都在飞牛网关的 CGI 后面，不额外开端口
 
 自己打包：

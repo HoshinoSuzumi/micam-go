@@ -39,6 +39,9 @@ type AppStatus struct {
 	// machine can play the stream. URLs are the addresses others can use.
 	Bind string             `json:"bind,omitempty"`
 	URLs []status.StreamURL `json:"urls,omitempty"`
+	// HLS are the same addresses pointing at the playlist, which is the only
+	// thing Safari and iOS can play.
+	HLS []status.StreamURL `json:"hls,omitempty"`
 
 	Frames  int64   `json:"frames"`
 	FPS     float64 `json:"fps"`
@@ -224,6 +227,7 @@ func (s *Server) snapshot(actionErr error) StatusResponse {
 		app.Codec = snap.Codec
 		app.Bind = snap.Bind
 		app.URLs = snap.URLs
+		app.HLS = snap.HLS
 		app.Frames = snap.Frames
 		app.FPS = snap.FPS
 		app.Viewers = snap.Viewers
@@ -269,7 +273,13 @@ func (s *Server) updateConfig() reply {
 		return s.fail(http.StatusBadRequest, fmt.Errorf("cannot read the request body: %w", err))
 	}
 
-	var incoming Config
+	// Start from what is stored, then overlay the request: a field the caller did
+	// not send must keep its current value. Decoding into a zero Config would turn
+	// `hls` off for anyone posting a partial update.
+	incoming, err := LoadConfig(s.Paths.EnvFile())
+	if err != nil {
+		return s.fail(http.StatusInternalServerError, fmt.Errorf("cannot read the current configuration: %w", err))
+	}
 	if err := json.Unmarshal(body, &incoming); err != nil {
 		return s.fail(http.StatusBadRequest, fmt.Errorf("cannot parse the request body: %w", err))
 	}

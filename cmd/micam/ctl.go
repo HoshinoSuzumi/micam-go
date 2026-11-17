@@ -38,6 +38,8 @@ func runWriteConfig() int {
 		PTSLead:   intOr(os.Getenv("wizard_pts_lead"), 100),
 		LAN:       os.Getenv("wizard_lan"),
 		Reconnect: intOr(os.Getenv("MICAM_RECONNECT"), 5),
+		HLS:       boolOr(os.Getenv("wizard_hls"), true),
+		HLSWindow: intOr(os.Getenv("wizard_hls_window"), 6),
 		PassToken: os.Getenv("wizard_pass_token"),
 	}
 	if err := cfg.Validate(); err != nil {
@@ -57,4 +59,14 @@ func intOr(value string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+// boolOr treats an unset variable as the fallback: a wizard field that was never
+// filled in must not silently turn a feature off.
+func boolOr(value string, fallback bool) bool {
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }

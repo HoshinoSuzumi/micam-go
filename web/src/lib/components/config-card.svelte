@@ -28,6 +28,9 @@
     pts_lead: number;
     lan: string;
     reconnect: number;
+    // The select stores a string; the API wants a boolean.
+    hls: "on" | "off";
+    hls_window: number;
     pass_token: string;
   }
 
@@ -41,6 +44,8 @@
       pts_lead: c.pts_lead ?? 100,
       lan: c.lan || "prefer",
       reconnect: c.reconnect ?? 5,
+      hls: (c.hls ?? true) ? "on" : "off",
+      hls_window: c.hls_window ?? 6,
       pass_token: "",
     };
   }
@@ -69,7 +74,11 @@
     error = "";
     message = "";
     try {
-      const result = await saveConfig({ ...form, has_token: config.has_token });
+      const result = await saveConfig({
+        ...form,
+        hls: form.hls === "on",
+        has_token: config.has_token,
+      });
       onSaved(result);
       form = { ...form, pass_token: "" };
       dirty = false;
@@ -199,6 +208,29 @@
           bind:value={form.reconnect}
           oninput={edit}
         />
+      </div>
+
+      <div class="space-y-1.5">
+        <Label for="hls">HLS 播放列表</Label>
+        <Select id="hls" bind:value={form.hls} onchange={edit}>
+          <option value="on">开启（Safari / iPhone 需要）</option>
+          <option value="off">关闭</option>
+        </Select>
+      </div>
+
+      <div class="space-y-1.5">
+        <Label for="hls-window">HLS 分片窗口</Label>
+        <Input
+          id="hls-window"
+          type="number"
+          min="0"
+          max="60"
+          bind:value={form.hls_window}
+          oninput={edit}
+        />
+        <p class="text-[11px] text-muted-foreground">
+          保留几个分片，6 约等于十几秒缓冲。调小延迟低，但弱网更容易卡。
+        </p>
       </div>
     </div>
 

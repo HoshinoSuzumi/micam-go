@@ -31,6 +31,8 @@ export interface AppStatus {
   bind?: string;
   /** urls are the addresses another machine can use, one per interface. */
   urls?: StreamURL[];
+  /** hls are the same addresses pointing at the playlist Safari and iOS need. */
+  hls?: StreamURL[];
   frames: number;
   fps: number;
   viewers: number;
@@ -49,6 +51,10 @@ export interface Config {
   pts_lead: number;
   lan: string;
   reconnect: number;
+  /** hls switches on the playlist Safari and iOS need. */
+  hls: boolean;
+  /** hls_window is how many segments the playlist keeps. */
+  hls_window: number;
   has_token: boolean;
   pass_token?: string;
 }

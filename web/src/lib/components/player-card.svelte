@@ -7,7 +7,8 @@
   let {
     url,
     endpoints = [],
-  }: { url: string; endpoints?: StreamURL[] } = $props();
+    hlsEnabled = false,
+  }: { url: string; endpoints?: StreamURL[]; hlsEnabled?: boolean } = $props();
 
   // Which row was copied last, so the feedback lands where the click did.
   let copied = $state<string | null>(null);
@@ -59,6 +60,11 @@
     { id: "vlc", text: `vlc ${active}` },
     { id: "ffplay", text: `ffplay -fflags nobuffer ${active}` },
   ]);
+
+  // The playlist lives next to the stream: same host, same port, different
+  // path. Deriving it from the selected address keeps one selector in charge of
+  // both, so the two can never point at different interfaces.
+  const hls = $derived(active.replace(/\.ts$/, ".m3u8"));
 
   async function copy(id: string, text: string) {
     const ok = await copyText(text);
@@ -125,5 +131,31 @@
         </button>
       {/each}
     </div>
+
+    {#if hlsEnabled}
+      <div class="space-y-2 border-t pt-3">
+        <div class="flex flex-wrap items-baseline gap-x-2">
+          <span class="text-xs font-medium">HLS 播放地址</span>
+          <span class="text-[11px] text-muted-foreground">
+            Safari、iPhone、iPad 用这个；播放器会自动按分片取流
+          </span>
+        </div>
+
+        <div class="flex flex-wrap gap-2">
+          <code
+            class="min-w-0 flex-1 basis-64 truncate rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs"
+            title={hls}>{hls}</code
+          >
+          <Button
+            variant="outline"
+            size="sm"
+            class="h-9 shrink-0"
+            onclick={() => copy("hls", hls)}
+          >
+            {copied === "hls" ? "已复制" : failed === "hls" ? "复制失败" : "复制"}
+          </Button>
+        </div>
+      </div>
+    {/if}
   </CardContent>
 </Card>

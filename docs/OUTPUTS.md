@@ -150,8 +150,8 @@ Publish(p) ─┬─► viewer（每连接）──► ts.Sink ──► HTTP bo
 - **P0 完成**：`internal/sink` 抽象，TS 适配器，`stream.Config.Sink`。
 - **P1 完成**：`internal/hls` —— Annex-B 拆分、SPS 解析、`hvcC`、fMP4 分片、滑动窗口、
   播放列表、`/cam.m3u8` 与 `/cam/{init.mp4,segN.m4s}` 三个端点。
-- **P2 部分完成**：状态文件里有 `hls` 地址、启动横幅会打印、`--hls` / `--hls-window` 已接。
-  **管理界面还没显示 HLS 地址**，需要改 `web/` 并重新构建前端。
+- **P2 完成**：状态文件里的 `hls` 地址、启动横幅、`--hls` / `--hls-window` 两个参数、
+  配置界面里的开关与窗口、应用设置（wizard）里的对应字段。
 - **P3 待做**：真机用 Safari / iPhone 各播一次。
 
 已知限制：

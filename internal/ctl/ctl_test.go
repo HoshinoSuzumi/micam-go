@@ -7,12 +7,25 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 
 	"micam/internal/status"
 )
+
+// requirePOSIX skips the tests that need a shell and POSIX process semantics.
+//
+// ctl only ever runs on fnOS, which is Linux, so this is not a portability
+// promise: it keeps `go test ./...` usable on a Windows development machine
+// instead of leaving four failures that mean nothing there. CI still runs them.
+func requirePOSIX(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a POSIX shell and POSIX process existence; runs in CI on Linux")
+	}
+}
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
@@ -119,6 +132,7 @@ func TestStatusReportsStoppedWhenThereIsNoProcess(t *testing.T) {
 }
 
 func TestStatusReadsThePublishedSnapshot(t *testing.T) {
+	requirePOSIX(t)
 	server, _ := newTestServer(t)
 
 	// A live pidfile (this test process) and a snapshot from the daemon.
@@ -193,6 +207,7 @@ func TestControlRejectsAnUnknownAction(t *testing.T) {
 }
 
 func TestConfigIsSavedAndApplied(t *testing.T) {
+	requirePOSIX(t)
 	server, calls := newTestServer(t)
 
 	// Running before the save: the new values must be picked up by a restart.
@@ -303,6 +318,7 @@ func TestWrongMethodIsRejected(t *testing.T) {
 // never manages to connect. It is a different problem - usually the package not
 // passing --status-file - so it gets its own stage.
 func TestStatusSaysWhenNothingPublishesState(t *testing.T) {
+	requirePOSIX(t)
 	server, _ := newTestServer(t)
 
 	if err := os.WriteFile(server.Paths.PIDFile(), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {

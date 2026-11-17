@@ -96,6 +96,22 @@
         ]
       },
       {
+        "type": "switch",
+        "field": "wizard_hls",
+        "label": "HLS 播放列表（Safari / iPhone 需要）",
+        "initValue": "true"
+      },
+      {
+        "type": "text",
+        "field": "wizard_hls_window",
+        "label": "HLS 分片窗口",
+        "initValue": "6",
+        "helpText": "保留几个分片，6 约等于十几秒缓冲；调小延迟低但弱网更易卡",
+        "rules": [
+          { "pattern": "^[0-9]+$", "message": "请填数字" }
+        ]
+      },
+      {
         "type": "tips",
         "helpText": "保存后会重启服务。如果一直没画面，先看应用目录下 var/micam.log。"
       }

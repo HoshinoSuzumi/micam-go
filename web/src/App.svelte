@@ -101,7 +101,7 @@
 
   {#if data}
     <StatusCard app={data.app} />
-    <PlayerCard {url} endpoints={data.app.urls ?? []} />
+    <PlayerCard {url} endpoints={data.app.urls ?? []} hlsEnabled={data.config.hls} />
     <ConfigCard
       config={data.config}
       onSaved={(result) => {

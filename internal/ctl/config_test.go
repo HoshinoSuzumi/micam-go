@@ -35,6 +35,8 @@ func TestConfigRoundTrip(t *testing.T) {
 // The file is sourced by cmd/main with `set -a; . micam.env`, so a value with a
 // quote, a dollar sign or a space must survive both directions.
 func TestConfigIsShellSafe(t *testing.T) {
+	requirePOSIX(t)
+
 	path := filepath.Join(t.TempDir(), "micam.env")
 
 	cfg := Defaults()
