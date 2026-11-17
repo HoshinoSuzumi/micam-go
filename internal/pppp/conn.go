@@ -3,9 +3,11 @@ package pppp
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -14,6 +16,33 @@ const (
 	mediaQueueDepth   = 256
 	readTimeout       = 500 * time.Millisecond
 )
+
+// Variables, not constants, so tests can shorten them - the same convention as
+// lanPort in lan.go.
+var (
+	// watchdogInterval is how often the session checks whether media is still
+	// flowing.
+	watchdogInterval = time.Second
+	// mediaIdleTimeout is how long the camera may stay silent before the session
+	// is declared dead.
+	//
+	// A half-open connection never reports an error: the peer disappears, the
+	// kernel keeps the socket, and reads simply time out forever. Without this the
+	// relay would sit in front of a frozen picture, never retrying and never
+	// telling anyone.
+	mediaIdleTimeout = 15 * time.Second
+)
+
+// ErrPeerClosed reports that the camera ended the session it accepted.
+var ErrPeerClosed = errors.New("pppp: the camera closed the session")
+
+// ErrMediaIdle reports a session that went quiet without closing: the camera
+// stopped sending, but the transport still looks alive.
+var ErrMediaIdle = errors.New("pppp: no media for the idle timeout")
+
+// errClosedLocally marks a session this process ended itself. It is not a
+// failure, so Err reports nil for it.
+var errClosedLocally = errors.New("pppp: the session was closed locally")
 
 // Conn carries application data over an established session.
 //
@@ -35,6 +64,12 @@ type Conn struct {
 	writeMu    sync.Mutex
 	commandSeq uint16
 	dropped    uint64
+
+	// lastMedia is the UnixNano of the last media message, or 0 before the first.
+	lastMedia atomic.Int64
+
+	errMu  sync.Mutex
+	reason error
 
 	closed    chan struct{}
 	closeOnce sync.Once
@@ -63,6 +98,7 @@ func NewConn(link Link, local Addr, log *slog.Logger) *Conn {
 func (c *Conn) Start() {
 	c.startOnce.Do(func() {
 		go c.readLoop()
+		go c.watchdog()
 		if c.link.Reliable() {
 			// A TCP session idles out without traffic; the vendor app sends a
 			// ping roughly once a second.
@@ -82,7 +118,34 @@ func (c *Conn) keepaliveLoop() {
 			return
 		case <-ticker.C:
 			if err := c.link.WriteFrame(ping); err != nil {
-				c.log.Debug("keepalive failed", "err", err)
+				// The transport only takes this path when it is reliable, and a
+				// reliable link that cannot be written to is gone, not idle.
+				c.fail(err)
+				return
+			}
+		}
+	}
+}
+
+// watchdog ends a session that has gone quiet without saying so.
+//
+// It only arms once media has arrived: before the first frame the channel is
+// legitimately silent, and the authentication handshake can take seconds.
+func (c *Conn) watchdog() {
+	ticker := time.NewTicker(watchdogInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.closed:
+			return
+		case <-ticker.C:
+			last := c.lastMedia.Load()
+			if last == 0 {
+				continue
+			}
+			if time.Since(time.Unix(0, last)) >= mediaIdleTimeout {
+				c.fail(ErrMediaIdle)
 				return
 			}
 		}
@@ -157,9 +220,38 @@ func (c *Conn) take(ctx context.Context, queue chan []byte) ([]byte, bool) {
 
 // Close tells the peer we are leaving, stops the reader and releases the link.
 func (c *Conn) Close() error {
+	c.setReason(errClosedLocally)
 	c.markClosed()
 	_ = c.sendRaw(EncodeFrame(MsgClose, nil))
 	return c.link.Close()
+}
+
+// Err explains why the session ended: nil while it is running or after a local
+// Close, ErrPeerClosed when the camera hung up, ErrMediaIdle when it went quiet,
+// and the transport error otherwise.
+func (c *Conn) Err() error {
+	c.errMu.Lock()
+	defer c.errMu.Unlock()
+	if errors.Is(c.reason, errClosedLocally) {
+		return nil
+	}
+	return c.reason
+}
+
+// setReason keeps the first explanation: anything recorded later is a
+// consequence of the session already ending, not its cause.
+func (c *Conn) setReason(err error) {
+	c.errMu.Lock()
+	if c.reason == nil {
+		c.reason = err
+	}
+	c.errMu.Unlock()
+}
+
+// fail records why the session is over and stops everyone waiting on it.
+func (c *Conn) fail(err error) {
+	c.setReason(err)
+	c.markClosed()
 }
 
 func (c *Conn) markClosed() {
@@ -192,7 +284,7 @@ func (c *Conn) readLoop() {
 				continue
 			}
 			c.log.Debug("receive stopped", "err", err)
-			c.markClosed()
+			c.fail(err)
 			return
 		}
 		if n == 0 {
@@ -219,7 +311,7 @@ func (c *Conn) handle(frame Frame) {
 		c.onSetup(frame.Payload)
 	case MsgClose:
 		c.log.Debug("peer closed the session", "peer", c.link.Describe())
-		c.markClosed()
+		c.fail(ErrPeerClosed)
 	}
 }
 
@@ -227,6 +319,9 @@ func (c *Conn) onData(payload []byte) {
 	channel, seq, data, ok := ParseDRW(payload)
 	if !ok {
 		return
+	}
+	if channel == ChannelMedia {
+		c.lastMedia.Store(time.Now().UnixNano())
 	}
 
 	// UDP loses fragments, so every one is acknowledged - duplicates included: a

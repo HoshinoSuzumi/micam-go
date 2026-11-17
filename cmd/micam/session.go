@@ -18,6 +18,19 @@ import (
 	"micam/internal/stream"
 )
 
+// healthySession is how long a session must have lived before a drop counts as a
+// new incident instead of a continuation of the one that spent the retry budget.
+//
+// Without this, hours of successful relaying are silently paid for by the next
+// five failures: the counter only ever went up, so the first bad night ended in
+// "giving up" and a container restart loop.
+const healthySession = 60 * time.Second
+
+// provisionTimeout bounds the cloud call that precedes every attempt. The HTTP
+// client's own timeout is finer for a login than for a reconnect, and waiting out
+// resolver retries is what turned a camera hiccup into minutes of dead air.
+const provisionTimeout = 15 * time.Second
+
 // runCamera keeps a session alive. When the stream ends on its own (the camera
 // rebooted, the relay dropped the session), it reconnects instead of exiting and
 // waiting for the orchestrator to restart the container.
@@ -28,25 +41,43 @@ import (
 func runCamera(ctx context.Context, opts *cli.Options, client *cloud.Client,
 	target cloud.Device, log *slog.Logger) int {
 
-	attempt := 0
+	pacer := &retryPacer{max: opts.Reconnect}
+	bannerShown := false
+
 	for {
-		code, retryable := streamSession(ctx, opts, client, target, attempt, log)
-		if !retryable || ctx.Err() != nil || attempt >= opts.Reconnect {
-			if retryable && opts.Reconnect > 0 && ctx.Err() == nil {
-				log.Error("giving up", "attempts", attempt+1, "max", opts.Reconnect+1)
-			}
-			return code
+		out := streamSession(ctx, opts, client, target, !bannerShown, log)
+		bannerShown = bannerShown || out.streaming
+
+		if ctx.Err() != nil || !out.retryable {
+			return out.code
 		}
 
-		attempt++
-		delay := reconnectDelay(attempt)
-		log.Warn("stream ended, reconnecting",
-			"attempt", attempt, "of", opts.Reconnect, "delay", delay.String())
+		stop, delay := pacer.after(out)
+		if stop {
+			if opts.Reconnect > 0 {
+				log.Error("giving up", "attempts", pacer.attempt, "max", opts.Reconnect+1)
+			}
+			return out.code
+		}
+
+		switch {
+		case out.cloud:
+			log.Warn("the Mi cloud is unreachable, retrying the same session",
+				"err", out.err, "delay", delay.String())
+		case out.healthy():
+			log.Warn("the camera dropped the stream, reconnecting",
+				"after", out.duration.Round(time.Second).String(),
+				"frames", out.frames, "err", out.err, "delay", delay.String())
+		default:
+			log.Warn("stream ended, reconnecting",
+				"attempt", pacer.attempt, "of", opts.Reconnect,
+				"frames", out.frames, "err", out.err, "delay", delay.String())
+		}
 
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():
-			return code
+			return out.code
 		}
 	}
 }
@@ -64,41 +95,96 @@ func reconnectDelay(attempt int) time.Duration {
 	return delay
 }
 
+// retryPacer decides when the reconnect loop gives up and how long to wait.
+//
+// Two failures need different treatment. A camera that drops the stream is a
+// session problem and spends the --reconnect budget. An unreachable Mi API is not
+// about the camera at all: restarting the container cannot fix it, and it would
+// only repeat the same failing login, so it is retried on its own ladder and
+// never exhausts the budget.
+type retryPacer struct {
+	max     int // --reconnect: how many consecutive session failures are allowed
+	attempt int // consecutive session failures
+	cloud   int // consecutive cloud failures
+}
+
+// after records one attempt and reports whether to stop, and how long to wait
+// before trying again.
+func (p *retryPacer) after(o outcome) (stop bool, delay time.Duration) {
+	if o.healthy() {
+		p.attempt, p.cloud = 0, 0
+	}
+	if p.max == 0 {
+		return true, 0 // documented: no retrying at all, let the orchestrator decide
+	}
+	if o.cloud {
+		p.cloud++
+		return false, reconnectDelay(p.cloud)
+	}
+
+	p.attempt++
+	if p.attempt > p.max {
+		return true, 0
+	}
+	return false, reconnectDelay(p.attempt)
+}
+
+// outcome is what one attempt achieved, and what the loop should infer from it.
+type outcome struct {
+	code      int
+	retryable bool
+	// cloud marks a failure before the camera was reached: the Mi API is down or
+	// unreachable, which says nothing about the camera behind it.
+	cloud bool
+	// streaming is set once the local server was announced to the user.
+	streaming bool
+	// frames counts relayed video frames and duration how long the session lived.
+	frames   int
+	duration time.Duration
+	err      error
+}
+
+// healthy reports whether the session ran long enough to prove that the camera
+// and the network were fine.
+func (o outcome) healthy() bool {
+	return o.frames > 0 && o.duration >= healthySession
+}
+
 // streamSession runs exactly one attempt: provision, connect, authenticate,
 // serve. Everything it opens is released by its own defers, so a retry starts
 // from a clean slate.
-//
-// The boolean reports whether another attempt could plausibly help.
 func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
-	target cloud.Device, attempt int, log *slog.Logger) (int, bool) {
+	target cloud.Device, showBanner bool, log *slog.Logger) outcome {
 
 	keys, err := miss.GenerateKeys()
 	if err != nil {
 		log.Error("cannot generate a key pair", "err", err)
-		return exitSession, true
+		return outcome{code: exitSession, retryable: true, err: err}
 	}
 
-	prov, err := client.Provision(ctx, target.DID, keys.PublicHex())
+	provCtx, cancel := context.WithTimeout(ctx, provisionTimeout)
+	prov, err := client.Provision(provCtx, target.DID, keys.PublicHex())
+	cancel()
 	if err != nil {
 		log.Error("provisioning failed", "err", err)
-		return exitSession, true
+		return outcome{code: exitSession, retryable: true, cloud: true, err: err}
 	}
 	if !prov.IsCS2() {
 		log.Error("unsupported transport", "vendor", prov.VendorName(),
 			"hint", "only cs2 is implemented")
-		return exitNoCamera, false
+		return outcome{code: exitNoCamera}
 	}
 
 	uid, err := pppp.ParseUID(prov.P2PID)
 	if err != nil {
 		log.Error("cannot parse the camera's P2P id", "err", err, "p2p_id", prov.P2PID)
-		return exitSession, false
+		return outcome{code: exitSession}
 	}
 
 	link, local, err := dialCamera(ctx, opts, target, uid, prov, log)
 	if err != nil {
 		log.Error("cannot reach the camera", "err", err)
-		return exitSession, true
+		return outcome{code: exitSession, retryable: true, err: err}
 	}
 
 	conn := pppp.NewConn(link, local, log)
@@ -108,25 +194,35 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 	media := miss.NewClient(conn)
 	if _, err := media.Authenticate(ctx, keys.PublicHex(), prov.Sign, 15*time.Second); err != nil {
 		log.Error("MISS authentication failed", "err", err)
-		return exitSession, true
+		return outcome{code: exitSession, retryable: true, err: err}
 	}
 
 	key, err := miss.SessionKey(keys.Private, prov.DevicePublic)
 	if err != nil {
 		log.Error("cannot derive the session key", "err", err)
-		return exitSession, false
+		return outcome{code: exitSession}
 	}
 	media.UseSessionKey(key)
 
 	log.Info("requesting video", "quality", opts.Quality, "pts_lead_ms", opts.PTSLeadMS)
 	if err := media.StartVideo(opts.Quality, false); err != nil {
 		log.Error("cannot start the video stream", "err", err)
-		return exitSession, true
+		return outcome{code: exitSession, retryable: true, err: err}
 	}
 	defer func() { _ = media.StopVideo() }()
 
+	// From here on the camera considers the session live, so this is where the
+	// health clock starts.
+	connectedAt := time.Now()
+
 	if opts.Dump != "" {
-		return dumpStream(ctx, media, opts, log)
+		code, retryable := dumpStream(ctx, media, opts, log)
+		return outcome{
+			code:      code,
+			retryable: retryable,
+			duration:  time.Since(connectedAt),
+			err:       conn.Err(),
+		}
 	}
 
 	addr := net.JoinHostPort(opts.Bind, strconv.Itoa(opts.Port))
@@ -138,14 +234,14 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 	if err := server.Start(); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "in use") {
 			log.Error("port already in use", "port", opts.Port, "hint", "pass --port to pick another")
-			return exitPort, false
+			return outcome{code: exitPort}
 		}
 		log.Error("cannot start the stream server", "err", err)
-		return exitPort, false
+		return outcome{code: exitPort}
 	}
 	defer server.Close()
 
-	if attempt == 0 {
+	if showBanner {
 		fmt.Println()
 		fmt.Printf("  Streaming at:  %s\n", server.URL())
 		fmt.Println()
@@ -186,20 +282,31 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 		}
 	}
 
+	out := outcome{
+		code:      exitOK,
+		streaming: true,
+		frames:    frames,
+		duration:  time.Since(connectedAt),
+		err:       conn.Err(),
+	}
+
 	switch {
 	case ctx.Err() != nil:
 		log.Info("stopped", "frames", frames)
-		return exitOK, false
+		out.retryable = false
 	case streamErr != nil:
 		log.Error("media error", "err", streamErr)
-		return exitSession, true
+		out.retryable, out.err = true, streamErr
 	case frames == 0:
-		log.Error("the session was established but no media arrived")
-		return exitNoMedia, true
+		log.Error("the session was established but no media arrived", "err", out.err)
+		out.code, out.retryable = exitNoMedia, true
 	default:
-		log.Warn("the camera stopped sending", "frames", frames)
-		return exitOK, true
+		// conn.Err() is what actually happened: the camera hung up, went quiet,
+		// or the transport failed. Without it this line only said "stopped".
+		log.Warn("the camera stopped sending", "frames", frames, "err", out.err)
+		out.retryable = true
 	}
+	return out
 }
 
 // lanHandshakeTimeout bounds the local attempt. Waiting longer than this costs

@@ -67,6 +67,15 @@ const tcpHeaderLen = 8
 
 type tcpLink struct {
 	conn net.Conn
+
+	// Partial-frame state. A read deadline can interrupt a frame in the middle;
+	// dropping the bytes already consumed would lose the framing for the rest of
+	// the session, because the next "header" would be payload. Keeping them here
+	// makes ReadFrame resumable instead.
+	hdr   [tcpHeaderLen]byte
+	hdrN  int
+	body  []byte
+	bodyN int
 }
 
 // DialTCP opens the TCP transport a camera offered in P2P_RDY_TCP.
@@ -81,22 +90,38 @@ func DialTCP(addr string, timeout time.Duration) (Link, error) {
 	return &tcpLink{conn: conn}, nil
 }
 
+// ReadFrame returns one whole frame, resuming a frame whose read was interrupted.
 func (l *tcpLink) ReadFrame(buf []byte) (int, error) {
-	var header [tcpHeaderLen]byte
-	if _, err := io.ReadFull(l.conn, header[:]); err != nil {
-		return 0, err
+	if l.hdrN < tcpHeaderLen {
+		n, err := io.ReadFull(l.conn, l.hdr[l.hdrN:])
+		l.hdrN += n
+		if err != nil {
+			return 0, err
+		}
+
+		size := int(binary.BigEndian.Uint16(l.hdr[0:2]))
+		if size > len(buf) {
+			l.hdrN = 0
+			return 0, fmt.Errorf("pppp: tcp frame of %d bytes does not fit in a %d-byte buffer", size, len(buf))
+		}
+		if cap(l.body) < size {
+			l.body = make([]byte, size)
+		} else {
+			l.body = l.body[:size]
+		}
+		l.bodyN = 0
 	}
 
-	n := int(binary.BigEndian.Uint16(header[0:2]))
-	if n == 0 {
-		return 0, nil
+	if l.bodyN < len(l.body) {
+		n, err := io.ReadFull(l.conn, l.body[l.bodyN:])
+		l.bodyN += n
+		if err != nil {
+			return 0, err
+		}
 	}
-	if n > len(buf) {
-		return 0, fmt.Errorf("pppp: tcp frame of %d bytes does not fit in a %d-byte buffer", n, len(buf))
-	}
-	if _, err := io.ReadFull(l.conn, buf[:n]); err != nil {
-		return 0, err
-	}
+
+	n := copy(buf, l.body)
+	l.hdrN, l.bodyN = 0, 0
 	return n, nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,7 +13,7 @@ import (
 )
 
 // Version is what --version prints.
-const Version = "micam-go 0.4.0"
+const Version = "micam-go 0.5.0"
 
 // Options is the parsed command line.
 type Options struct {
@@ -85,7 +86,8 @@ func Parse(args []string) (*Options, error) {
 	fs.IntVar(&timeoutSeconds, "connect-timeout", 90,
 		"seconds to keep retrying the relay handshake")
 	fs.BoolVar(&opts.Relogin, "relogin", false, "discard the cached session and log in again")
-	fs.BoolVar(&opts.Verbose, "verbose", false, "trace every PPPP datagram")
+	fs.BoolVar(&opts.Verbose, "verbose", envBoolOr("MICAM_VERBOSE", false),
+		"trace every PPPP datagram")
 	fs.BoolVar(&opts.ShowVersion, "version", false, "print the version and exit")
 	fs.BoolVar(&opts.ListCameras, "list-cameras", false,
 		"log in, print the cameras on the account and exit")
@@ -176,4 +178,16 @@ func envIntOr(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func envBoolOr(key string, fallback bool) bool {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(v)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }

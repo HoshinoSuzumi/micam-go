@@ -66,7 +66,7 @@ micam --did 1234567890 --region cn --port 8554
 | `--quality` | `2` | 0 auto / 1 SD / 2 HD / 3 full；协议支持到 5，新机型常把全分辨率放在 3 |
 | `--pts-lead` | `100` | 画面提前量（毫秒）：越小越跟手，越大对软件解码越宽容 |
 | `--list-cameras` | off | 只登录并列出摄像头（DID / 型号 / 在线状态）后退出，不连中继、不开端口 |
-| `--reconnect` | `0` | 断流后自动重连的次数；`0` 表示不重连，交给编排层重启 |
+| `--reconnect` | `0` | **连续**断流后自动重连的次数；`0` 表示不重连，交给编排层重启 |
 | `--data-dir` | `~/.micam` | 存放 `credentials.json` 的目录；家目录不可写时用它换位置 |
 | `--lan` | `prefer` | `prefer` 先试局域网直连、失败回落中继；`only` 只用局域网；`off` 只用中继 |
 | `--dump` | — | 把解密后的裸码流存到文件，不对外提供 HTTP |
@@ -78,7 +78,9 @@ micam --did 1234567890 --region cn --port 8554
 
 环境变量：`MICAM_USER` `MICAM_USER_ID` `MICAM_REGION` `MICAM_DID` `MICAM_PASS_TOKEN`
 `MICAM_PASS_TOKEN_FILE` `MICAM_BIND` `MICAM_PORT` `MICAM_QUALITY` `MICAM_PTS_LEAD`
-`MICAM_RECONNECT` `MICAM_LAN`。
+`MICAM_RECONNECT` `MICAM_LAN` `MICAM_VERBOSE`。
+
+容器里改不了命令行参数，`--verbose` 用 `MICAM_VERBOSE=1` 打开。
 
 ### 先拿到 DID
 
@@ -148,6 +150,33 @@ ffmpeg -v error -i http://127.0.0.1:8554/cam.ts -t 10 -f null -
 
 输出为空说明我们发出的码流是干净的，报错来自播放器**实时解码跟不上、自己丢帧**——
 2K H.265 用软件解码很容易触发，换硬件解码即可。同样可以用 `--dump` 存一份裸码流离线验证。
+
+### 断流与重连
+
+`the camera stopped sending` 现在会带上真正的原因（`err=`），不再只是一句"停了"：
+
+| `err` | 含义 | 往哪查 |
+|---|---|---|
+| `pppp: the camera closed the session` | 摄像头主动结束了会话 | 摄像头重启、被米家 App/HA 抢占、供电 |
+| `pppp: no media for the idle timeout` | 15s 无媒体但连接还在 | 掉电、Wi-Fi 掉线——半开连接不会报错，只能靠看门狗发现 |
+| `EOF` / `connection reset by peer` | socket 层断开 | 同上，通常是网络或摄像头侧 |
+
+重连额度按**连续失败**计：会话跑满 60 秒就算这次故障结束，计数器清零。所以"稳跑一夜
+再掉线"不会消耗额度。Mi 云接口不可达（`the Mi cloud is unreachable`）不算会话失败，
+既不占额度也不会 `giving up`——重启进程修不好 DNS，只会把同一次登录失败重复一遍。
+
+半夜断流时按顺序排除：
+
+```sh
+docker compose logs | grep -E "stopped sending|dropped the stream|cloud is unreachable"
+ping -i 1 192.168.0.109        # 摄像头是否在丢包/重启
+ss -tnp | grep 192.168.0.109   # 是否同时有别的客户端占着这个会话
+cat /etc/resolv.conf           # 解析器指向 100.100.100.100 / fd7a:115c:a1e0::53 就是 Tailscale
+systemctl status tailscaled    # MagicDNS 挂了会让 api.io.mi.com 整体不可达
+```
+
+`viewers=0` 说明当前没有人看，但流仍在以 20fps 持续拉取——摄像头会一直满负荷编码。
+如果长时间没人看，停掉容器比让它空转更省摄像头寿命。
 
 ### 二次验证
 
