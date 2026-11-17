@@ -3,6 +3,7 @@ package stream
 import (
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -243,5 +244,64 @@ func TestServerWildcardIsReachable(t *testing.T) {
 	}
 	if strings.HasPrefix(server.Addr(), "127.") {
 		t.Fatalf("Addr() = %q, want the wildcard the kernel bound", server.Addr())
+	}
+}
+
+// The banner must not advertise loopback, link-local or the unspecified address as
+// something another machine can open - and it must prefer IPv4, which is what a
+// Tailscale or LAN user will actually type.
+func TestReachableURLsSkipUnusableAddresses(t *testing.T) {
+	mustAddr := func(s string) *net.IPNet {
+		ip, ipnet, err := net.ParseCIDR(s)
+		if err != nil {
+			t.Fatalf("bad fixture %q: %v", s, err)
+		}
+		ipnet.IP = ip
+		return ipnet
+	}
+
+	candidates := []candidateAddr{
+		{Iface: "lo", Addr: mustAddr("127.0.0.1/8")},
+		{Iface: "lo", Addr: mustAddr("::1/128")},
+		{Iface: "enp1s0", Addr: mustAddr("169.254.10.20/16")},
+		{Iface: "enp1s0", Addr: mustAddr("fe80::1/64")},
+		{Iface: "tailscale0", Addr: mustAddr("100.103.197.34/32")},
+		{Iface: "enp1s0", Addr: mustAddr("192.168.0.5/24")},
+		{Iface: "enp1s0", Addr: mustAddr("2001:db8::5/64")},
+	}
+
+	got := reachableURLs(candidates, "8554", "/cam.ts")
+	if len(got) != 3 {
+		t.Fatalf("got %d urls, want 3: %+v", len(got), got)
+	}
+
+	if got[0].URL != "http://100.103.197.34:8554/cam.ts" || got[0].Iface != "tailscale0" {
+		t.Errorf("first = %+v, want the tailscale IPv4", got[0])
+	}
+	if got[1].URL != "http://192.168.0.5:8554/cam.ts" {
+		t.Errorf("second = %+v, want the LAN IPv4", got[1])
+	}
+	if got[2].URL != "http://[2001:db8::5]:8554/cam.ts" {
+		t.Errorf("third = %+v, want the IPv6 address bracketed", got[2])
+	}
+
+	for _, u := range got {
+		for _, bad := range []string{"127.0.0.1", "::1", "169.254.", "fe80:", "[::]"} {
+			if strings.Contains(u.URL, bad) {
+				t.Errorf("%q should not be advertised", u.URL)
+			}
+		}
+	}
+}
+
+func TestReachableURLsAreEmptyForALoopbackListener(t *testing.T) {
+	server := New(Config{Addr: "127.0.0.1:0", Path: "/cam.ts"}, testLogger())
+	if err := server.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer server.Close()
+
+	if got := server.ReachableURLs(); len(got) != 0 {
+		t.Fatalf("a loopback listener must advertise nothing, got %+v", got)
 	}
 }

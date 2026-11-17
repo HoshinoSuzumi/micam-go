@@ -263,10 +263,26 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 		fmt.Println()
 		fmt.Printf("  Listening on:  %s\n", server.Addr())
 		fmt.Printf("  Local URL:     %s\n", server.URL())
+
+		// The addresses a player elsewhere can use. "127.0.0.1" is true and
+		// useless; the wildcard the process bound to is not a URL at all.
+		reachable := server.ReachableURLs()
+		if len(reachable) > 0 {
+			fmt.Println()
+			fmt.Println("  Reachable at:")
+			for _, u := range reachable {
+				fmt.Printf("    %-40s (%s)\n", u.URL, u.Iface)
+			}
+		}
+
+		player := server.URL()
+		if len(reachable) > 0 {
+			player = reachable[0].URL
+		}
 		fmt.Println()
-		fmt.Printf("    mpv    %s\n", server.URL())
-		fmt.Printf("    vlc    %s\n", server.URL())
-		fmt.Printf("    ffplay %s\n", server.URL())
+		fmt.Printf("    mpv    %s\n", player)
+		fmt.Printf("    vlc    %s\n", player)
+		fmt.Printf("    ffplay %s\n", player)
 		fmt.Println()
 	} else {
 		log.Info("streaming again", "listen", server.Addr(), "url", server.URL())

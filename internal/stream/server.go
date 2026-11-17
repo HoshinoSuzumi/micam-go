@@ -97,6 +97,84 @@ func (s *Server) Addr() string {
 	return s.cfg.Addr
 }
 
+// ReachableURL is one address another machine can open.
+type ReachableURL struct {
+	URL   string
+	Iface string
+}
+
+// ReachableURLs lists what someone else could actually type: one entry per
+// non-loopback address of this host. Empty when the listener is loopback-only.
+//
+// It exists because "http://127.0.0.1:8554" answers none of the questions a person
+// debugging remote access has, and the wildcard it was bound to is not a URL.
+func (s *Server) ReachableURLs() []ReachableURL {
+	if s.Loopback() {
+		return nil
+	}
+	_, port, err := net.SplitHostPort(s.Addr())
+	if err != nil {
+		return nil
+	}
+
+	var candidates []candidateAddr
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			candidates = append(candidates, candidateAddr{Iface: iface.Name, Addr: addr})
+		}
+	}
+	return reachableURLs(candidates, port, s.cfg.Path)
+}
+
+type candidateAddr struct {
+	Iface string
+	Addr  net.Addr
+}
+
+// reachableURLs keeps the addresses worth publishing: IPv4 first, no loopback, no
+// link-local, no unspecified.
+func reachableURLs(candidates []candidateAddr, port, path string) []ReachableURL {
+	var v4, v6 []ReachableURL
+
+	for _, c := range candidates {
+		ipNet, ok := c.Addr.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		ip := ipNet.IP
+		if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			continue
+		}
+		// RFC 2544 benchmarking space: some VPNs hand it out as a fake-IP range, and
+		// it is never an address anyone can dial from another machine.
+		if v4 := ip.To4(); v4 != nil && v4[0] == 198 && (v4[1] == 18 || v4[1] == 19) {
+			continue
+		}
+
+		entry := ReachableURL{
+			URL:   "http://" + net.JoinHostPort(ip.String(), port) + path,
+			Iface: c.Iface,
+		}
+		if ip.To4() != nil {
+			v4 = append(v4, entry)
+		} else {
+			v6 = append(v6, entry)
+		}
+	}
+	return append(v4, v6...)
+}
+
 // Loopback reports whether the listener is reachable only from this machine.
 func (s *Server) Loopback() bool {
 	addr, err := netip.ParseAddrPort(s.Addr())
@@ -107,13 +185,14 @@ func (s *Server) Loopback() bool {
 	return addr.Addr().IsLoopback()
 }
 
-// URL is the address a player should open.
+// URL is the address a player on this machine should open: the port actually
+// bound, with a wildcard replaced by loopback (a wildcard is not a URL).
 func (s *Server) URL() string {
-	host, port, err := net.SplitHostPort(s.cfg.Addr)
+	host, port, err := net.SplitHostPort(s.Addr())
 	if err != nil {
 		return "http://" + s.cfg.Addr + s.cfg.Path
 	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
+	if ip, err := netip.ParseAddr(host); err != nil || ip.IsUnspecified() {
 		host = "127.0.0.1"
 	}
 	return "http://" + net.JoinHostPort(host, port) + s.cfg.Path

@@ -306,9 +306,19 @@ docker compose logs | grep -E "direct local session|connecting via"
 ### 从外面看（局域网 / Tailscale）
 
 流是普通 HTTP，地址就是 `http://<NAS 地址>:8554/cam.ts`。能打开的前提只有一个：micam
-监听在**非 loopback** 的地址上。fnOS 包里 `cmd/main` 会设 `MICAM_BIND=0.0.0.0`，界面
-「连接状态」里的**监听**一行显示的是内核实际绑定的地址——如果那行是 `127.0.0.1:8554`，
-就只有 NAS 自己能打开，局域网和 Tailscale 都不行（这时界面会直接标黄）。
+监听在**非 loopback** 的地址上。启动日志会直接把可用的地址列出来：
+
+```
+  Listening on:  [::]:8554                    ← 双栈通配，等价于 0.0.0.0:8554
+  Local URL:     http://127.0.0.1:8554/cam.ts ← 只有 NAS 自己能打开
+  Reachable at:
+    http://192.168.0.5:8554/cam.ts            (enp1s0)
+    http://100.103.197.34:8554/cam.ts         (tailscale0)
+```
+
+（`[::]:8554` 能接 IPv4 的前提是 `net.ipv6.bindv6only=0`，Linux 默认如此。）
+fnOS 包里 `cmd/main` 会设 `MICAM_BIND=0.0.0.0`；界面「连接状态」里的**监听**一行显示的
+是内核实际绑定的地址——如果是 `127.0.0.1:8554`，就只有 NAS 自己能打开，界面会直接标黄。
 
 打不开时先分清是谁在报错，`curl` 比浏览器诚实：
 
