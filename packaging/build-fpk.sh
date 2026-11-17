@@ -29,9 +29,15 @@ if [ ! -f "$SRC/manifest" ]; then
     exit 1
 fi
 
-VERSION=$(sed -n 's/^version="\(.*\)"/\1/p' "$SRC/manifest")
+# 版本来自 tag（发布时来自 MICAM_VERSION），不来自 manifest：那里面是上一次
+# 构建写下的值，正是"0.6.2 的包带着 0.5.0 的二进制"的来源。
+VERSION="${MICAM_VERSION:-}"
+VERSION="${VERSION#v}"
 if [ -z "$VERSION" ]; then
-    echo "manifest 里没有 version=\"...\"" >&2
+    VERSION=$(git -C "$ROOT" describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || true)
+fi
+if [ -z "$VERSION" ]; then
+    echo "无法确定版本号：设置 MICAM_VERSION，或者先打一个 tag" >&2
     exit 1
 fi
 
@@ -47,7 +53,8 @@ mkdir -p "$BUILD"
 
 mkdir -p "$BUILD/app/bin"
 CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" \
-    go build -trimpath -ldflags="-s -w" \
+    go build -trimpath \
+    -ldflags="-s -w -X 'micam/internal/cli.Version=${VERSION}'" \
     -o "$BUILD/app/bin/micam" "$ROOT/cmd/micam"
 
 # 界面是构建产物，不进仓库：没有就先构建，别打出一个没有 UI 的包。
@@ -60,12 +67,15 @@ rm -rf "$BUILD/app/www"
 mkdir -p "$BUILD/app/www"
 cp -R "$WEB/." "$BUILD/app/www/"
 
-# platform 按架构改写；sed -i.bak 在 GNU 和 BSD 上都能用。
+# 版本与架构都写进 manifest；sed -i.bak 在 GNU 和 BSD 上都能用。
+sed -i.bak "s|^version=.*|version=\"$VERSION\"|" "$BUILD/manifest"
 sed -i.bak "s|^platform=.*|platform=\"$PLATFORM\"|" "$BUILD/manifest"
 rm -f "$BUILD/manifest.bak"
 
 grep -n '^version=' "$BUILD/manifest"
 grep -n '^platform=' "$BUILD/manifest"
+
+echo "building micam $VERSION for $ARCH ($PLATFORM)"
 
 OUT="$ROOT/micam_${VERSION}_${ARCH}.fpk"
 rm -f "$ROOT/micam.fpk" "$OUT"

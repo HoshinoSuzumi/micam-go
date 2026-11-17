@@ -55,7 +55,7 @@ func run(args []string) int {
 		return exitLogin
 	}
 	if opts.ShowVersion {
-		fmt.Println(cli.Version)
+		fmt.Println(cli.FullVersion())
 		return exitOK
 	}
 

@@ -55,8 +55,12 @@ make fpk ARCHS=arm64     # 只要 ARM 的
 目录，交叉编译 `app/bin/micam`，把 `manifest` 的 `platform` 改成 `x86`/`arm`，然后调用
 `fnpack build`，最后把产物改名成 `micam_<版本>_<arch>.fpk`。
 
-需要 `fnpack`：<https://developer.fnnas.com/docs/cli/fnpack>。版本号取自
-`packaging/fnos/manifest`，CI 会在打包前用 tag 覆盖它。
+需要 `fnpack`：<https://developer.fnnas.com/docs/cli/fnpack>。
+
+版本号**不取自 manifest**，而是取自 `MICAM_VERSION`（CI 传入的 tag）或 `git describe`
+的最近 tag：脚本把它同时写进 `manifest` 和二进制（`-X micam/internal/cli.Version=…`），
+所以包上的版本、`micam --version`、界面里显示的版本一定一致。manifest 里留着的数字只是
+上一次发布的结果，供直接 `fnpack build` 的人参考。
 
 ## 运行时目录
 

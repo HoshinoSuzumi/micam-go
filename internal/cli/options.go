@@ -12,8 +12,22 @@ import (
 	"micam/internal/creds"
 )
 
-// Version is what --version prints.
-const Version = "micam-go 0.5.0"
+// Version is the release number, injected at build time:
+//
+//	go build -ldflags "-X 'micam/internal/cli.Version=0.6.2'"
+//
+// It is deliberately not a literal. A hardcoded value is wrong the moment the next
+// tag is cut - 0.6.2 packages used to ship with a binary that said 0.5.0 - and the
+// tag is the only place a release number actually lives.
+var Version = "dev"
+
+// FullVersion is what --version prints and what the management UI shows.
+func FullVersion() string {
+	if Version == "dev" {
+		return "micam-go dev"
+	}
+	return "micam-go " + Version
+}
 
 // Options is the parsed command line.
 type Options struct {

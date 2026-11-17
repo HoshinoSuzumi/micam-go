@@ -16,7 +16,7 @@ import (
 func runCtl() int {
 	server := &ctl.Server{
 		Paths:   ctl.FromEnv(),
-		Version: cli.Version,
+		Version: cli.FullVersion(),
 		Log:     newLogger(os.Getenv("MICAM_VERBOSE") != ""),
 	}
 	return server.Serve()

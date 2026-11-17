@@ -13,8 +13,12 @@ COPY . .
 
 ARG TARGETOS=linux
 ARG TARGETARCH
+# 版本在编译期写进二进制；发布工作流用 --build-arg 传 tag 去 v 之后的值。
+ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o /out/micam ./cmd/micam
+    go build -trimpath \
+    -ldflags="-s -w -X 'micam/internal/cli.Version=${VERSION}'" \
+    -o /out/micam ./cmd/micam
 
 # ---- runtime ---------------------------------------------------------------
 FROM alpine:3.20

@@ -341,8 +341,20 @@ make fpk ARCHS=amd64            # 只要 x86 的
 | `release` | 打 tag → 多架构镜像 → 推送；可选顺带打包 fpk | Actions → release → Run workflow |
 | `fpk` | 把某个 tag 打成 `.fpk` | Actions → fpk → Run workflow |
 
-**发版**：Actions → `release` → Run workflow，填版本号（如 `0.5.0`）。工作流会**自己创建
-并推送 `v0.5.0`**，再用它构建镜像——不需要本地 `git tag`。tag 已存在会直接失败，避免覆盖。
+**发版**：Actions → `release` → Run workflow，填版本号（如 `0.6.2`）。工作流会
+
+1. 把 `packaging/fnos/manifest` 和 `web/package.json` 里的版本号写成这个版本，提交成
+   `chore: release 0.6.2` 并推回分支（推不上去就跳过，不影响发布）；
+2. 在自己刚提交的那个提交上创建并推送 `v0.6.2`；
+3. 所有后续构建都 checkout 这个 tag，并把去掉 `v` 的版本号注入二进制。
+
+版本号**只有 tag 一个来源**：`micam --version` 和界面上的版本是编译期用
+`-ldflags -X micam/internal/cli.Version=…` 写进去的，`manifest` 在打包时由
+`packaging/build-fpk.sh` 写成同一个值。仓库里没有"需要手动改的版本常量"，也就不会再出现
+「0.6.2 的包带着 0.5.0 的二进制」。`make build` 走 `scripts/version.sh`，本地构建显示的是
+`git describe` 的结果（例如 `0.6.2-3-gabc1234`，脏工作区再带 `-dirty`）。
+
+tag 已存在会直接失败，避免覆盖。
 
 三个可选开关：
 
@@ -353,7 +365,7 @@ make fpk ARCHS=amd64            # 只要 x86 的
 | `draft` | 开 | GitHub Release 建成草稿，检查过产物再手动发布 |
 
 **产物都挂在 GitHub Release 上**：`micam-linux-arm64`、`micam-linux-amd64`，勾了 `fpk`
-时还有 `micam_<版本>.fpk`。草稿只影响 Release 的可见性，镜像和 tag 都是正常发布的。
+时还有 `micam_<版本>_amd64.fpk` 与 `micam_<版本>_arm64.fpk`。草稿只影响 Release 的可见性，镜像和 tag 都是正常发布的。
 
 **只打包 fpk**：Actions → `fpk` → Run workflow。tag 留空表示用最新的 tag，也可以填指定
 版本；它**只读仓库、不会打 tag**，产物同样挂到对应 tag 的 Release（没有就新建一个草稿）。

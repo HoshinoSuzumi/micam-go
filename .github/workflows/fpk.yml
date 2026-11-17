@@ -83,19 +83,14 @@ jobs:
           npm ci --no-audit --no-fund
           npm run build
 
-      - name: Stamp the version into the manifest
-        run: |
-          version="${{ steps.ref.outputs.version }}"
-
-          # manifest 的 version 必须和 tag 一致
-          sed -i "s|^version=.*|version=\"${version}\"|" packaging/fnos/manifest
-          grep -n '^version=' packaging/fnos/manifest
-
       - name: Build the packages
-        # 服务是静态二进制，每种架构一个包（manifest 的 platform 由脚本改写）。
+        # 版本与架构都由脚本写进包里：manifest 的 version 和二进制里注入的版本
+        # 都来自这个 tag，和仓库里最后一次提交的数字无关。
+        env:
+          VERSION: ${{ steps.ref.outputs.version }}
         run: |
-          ./packaging/build-fpk.sh amd64
-          ./packaging/build-fpk.sh arm64
+          MICAM_VERSION="$VERSION" ./packaging/build-fpk.sh amd64
+          MICAM_VERSION="$VERSION" ./packaging/build-fpk.sh arm64
 
           mkdir -p dist
           mv -v micam_*.fpk dist/

@@ -1,12 +1,17 @@
 GO ?= go
 BIN ?= micam
 
+# 版本号来自 git tag（发布时来自 MICAM_VERSION），编译期注入，
+# 所以二进制里的版本永远对得上当时打的那个 tag。
+VERSION ?= $(shell ./scripts/version.sh)
+LDFLAGS := -s -w -X 'micam/internal/cli.Version=$(VERSION)'
+
 # Registry coordinates for the image targets. Override on the command line:
 #   make docker-push IMAGE=youruser/micam TAG=0.4.0
 IMAGE ?= hoshinosuzumi/micam-go
 TAG ?= dev
 
-.PHONY: fmt vet test build cross web docker docker-push docker-push-multi fpk clean
+.PHONY: fmt vet test version build cross web docker docker-push docker-push-multi fpk clean
 
 fmt:
 	gofmt -w .
@@ -17,13 +22,16 @@ vet:
 test:
 	$(GO) test -count=1 ./...
 
+version:
+	@echo $(VERSION)
+
 build:
 	mkdir -p bin
-	CGO_ENABLED=0 $(GO) build -trimpath -ldflags="-s -w" -o bin/$(BIN) ./cmd/micam
+	CGO_ENABLED=0 $(GO) build -trimpath -ldflags="$(LDFLAGS)" -o bin/$(BIN) ./cmd/micam
 
 cross:
 	mkdir -p bin
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags="-s -w" \
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags="$(LDFLAGS)" \
 		-o bin/$(BIN)-linux-arm64 ./cmd/micam
 
 # Build for the machine running the command.
