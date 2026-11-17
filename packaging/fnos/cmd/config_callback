@@ -1,21 +1,21 @@
 #!/bin/sh
-# 配置变更后：把向导收集到的值写成 env 文件与 token 文件，再重建容器。
+# 配置变更后：把向导收集到的值写成 env 文件与 token 文件，再重启服务。
 #
-# 只写"用户可配置"的值。监听地址、端口、token 路径由 docker-compose.yaml
-# 决定，同一个事实只写一处。
+# 只写"用户可配置"的值。监听地址、端口、token 路径、数据目录由 cmd/main 决定。
 #
 # 向导值来自同名字段：wizard_user / wizard_user_id / wizard_region /
 # wizard_did / wizard_quality / wizard_lan / wizard_pts_lead / wizard_pass_token。
 set -eu
 
-ETC="${TRIM_PKGETC:-/var/apps/micam/etc}"
-VAR="${TRIM_PKGVAR:-/var/apps/micam/var}"
-COMPOSE_FILE="${TRIM_APPDEST:-/var/apps/micam/target}/docker/docker-compose.yaml"
+APP="${TRIM_APPNAME:-micam}"
+PKGETC="${TRIM_PKGETC:-/var/apps/$APP/etc}"
+PKGVAR="${TRIM_PKGVAR:-/var/apps/$APP/var}"
+HERE=$(cd "$(dirname "$0")" && pwd)
 
-mkdir -p "$ETC" "$VAR"
+mkdir -p "$PKGETC" "$PKGVAR"
 umask 077
 
-cat > "$ETC/micam.env" <<EOF
+cat >"$PKGETC/micam.env" <<ENVEOF
 MICAM_USER=${wizard_user:-}
 MICAM_USER_ID=${wizard_user_id:-}
 MICAM_REGION=${wizard_region:-cn}
@@ -24,23 +24,25 @@ MICAM_QUALITY=${wizard_quality:-3}
 MICAM_PTS_LEAD=${wizard_pts_lead:-100}
 MICAM_LAN=${wizard_lan:-prefer}
 MICAM_RECONNECT=5
-EOF
-chmod 600 "$ETC/micam.env"
+ENVEOF
+chmod 600 "$PKGETC/micam.env"
 
-printf '%s' "${wizard_pass_token:-}" > "$ETC/pass_token"
-chmod 600 "$ETC/pass_token"
+printf '%s' "${wizard_pass_token:-}" >"$PKGETC/pass_token"
+chmod 600 "$PKGETC/pass_token"
 
-# 容器内的 entrypoint 以 uid 10001 读取配置
-chown 10001:10001 "$ETC/micam.env" "$ETC/pass_token" 2>/dev/null || true
-chown -R 10001:10001 "$VAR" 2>/dev/null || true
+if [ "$(id -u)" = 0 ] && [ -n "${TRIM_UID:-}" ]; then
+    chown "$TRIM_UID:${TRIM_GID:-$TRIM_UID}" "$PKGETC/micam.env" "$PKGETC/pass_token" 2>/dev/null || true
+    chown -R "$TRIM_UID:${TRIM_GID:-$TRIM_UID}" "$PKGVAR" 2>/dev/null || true
+fi
+
+# 配置变了就得换进程：只写文件的话，正在跑的那个还在用旧值。
+"$HERE/main" stop || true
 
 if [ -z "${wizard_did:-}" ]; then
-    echo "缺少 DID，服务不会自动启动。" >> "${TRIM_TEMP_LOGFILE:-/dev/null}"
+    echo "缺少 DID，服务不会自动启动。" >>"${TRIM_TEMP_LOGFILE:-/dev/null}"
     exit 0
 fi
 
-if [ -f "$COMPOSE_FILE" ]; then
-    docker compose -f "$COMPOSE_FILE" -p micam up -d --force-recreate
-fi
+"$HERE/main" start || true
 
 exit 0

@@ -22,6 +22,7 @@ permissions:
   contents: write # 上传产物到 GitHub Release（不创建 tag）
 
 env:
+  GO_VERSION: "1.23"
   FNPACK_VERSION: "1.2.3"
 
 jobs:
@@ -64,31 +65,28 @@ jobs:
           chmod +x /usr/local/bin/fnpack
           fnpack --help | head -5
 
-      - name: Stamp the version into the package
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Stamp the version into the manifest
         run: |
           version="${{ steps.ref.outputs.version }}"
 
           # manifest 的 version 必须和 tag 一致
           sed -i "s|^version=.*|version=\"${version}\"|" packaging/fnos/manifest
-
-          # 让 fpk 默认拉这个版本的镜像，而不是 latest
-          sed -i "s|:latest}|:${version}}|" packaging/fnos/app/docker/docker-compose.yaml
-
           grep -n '^version=' packaging/fnos/manifest
-          grep -n 'image:' packaging/fnos/app/docker/docker-compose.yaml
 
-      - name: Build the package
-        run: fnpack build --directory packaging/fnos
-
-      - name: Collect the artifact
-        # 产物统一命名成 micam_<版本>.fpk：应用中心里几个版本堆在一起时，
-        # 光看 micam.fpk 分不出谁是谁。
+      - name: Build the packages
+        # 服务是静态二进制，每种架构一个包（manifest 的 platform 由脚本改写）。
         run: |
-          version="${{ steps.ref.outputs.version }}"
+          ./packaging/build-fpk.sh amd64
+          ./packaging/build-fpk.sh arm64
+
           mkdir -p dist
-          find . -maxdepth 3 -name '*.fpk' -exec cp -v {} "dist/micam_${version}.fpk" \;
+          mv -v micam_*.fpk dist/
           ls -lh dist
-          test -f "dist/micam_${version}.fpk"
 
       - uses: actions/upload-artifact@v4
         with:

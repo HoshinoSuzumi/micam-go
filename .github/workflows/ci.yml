@@ -33,3 +33,9 @@ jobs:
 
       - run: go vet ./...
       - run: go test ./...
+
+      - name: Check the packaging scripts
+        run: |
+          for f in packaging/fnos/cmd/* packaging/build-fpk.sh; do
+            sh -n "$f"
+          done

@@ -1,33 +1,218 @@
 #!/bin/sh
 # start / stop / status，由飞牛 fnOS 应用中心调用。
 #
-# 容器由 docker-project 资源声明，理论上框架也会管它的生命周期；这里的调用是
-# 幂等的（compose up 不会重复创建，down 重复执行也无害），两条路径都成立。
+# 服务是包用户下的一个普通进程：没有容器，也没有 supervisor 替我们拉起。所以这里
+# 做两件事：
+#
+#   1. 把 micam 放进独立的会话（setsid），stop 时按进程组一次收掉；
+#   2. 在原地看守它——micam 连续断流放弃时（退出码 3）隔一会儿再拉起来，效果等同
+#      容器版的 restart: unless-stopped。
+#
+# start 必须立刻返回，所以看守循环是内部子命令 __supervise：start 用 nohup 把它扔到
+# 后台，它自己把 pid 写进 pidfile，避免依赖 $!（setsid 可能会再 fork 一次）。
 set -eu
 
-COMPOSE_FILE="${TRIM_APPDEST:-/var/apps/micam/target}/docker/docker-compose.yaml"
-PROJECT="micam"
+APP="${TRIM_APPNAME:-micam}"
+APPDEST="${TRIM_APPDEST:-/var/apps/$APP/target}"
+PKGETC="${TRIM_PKGETC:-/var/apps/$APP/etc}"
+PKGVAR="${TRIM_PKGVAR:-/var/apps/$APP/var}"
 
-compose() {
-    docker compose -f "$COMPOSE_FILE" -p "$PROJECT" "$@"
+BIN="$APPDEST/bin/micam"
+ENVFILE="$PKGETC/micam.env"
+TOKENFILE="$PKGETC/pass_token"
+PIDFILE="$PKGVAR/micam.pid"
+LOG="$PKGVAR/micam.log"
+
+# 日志超过这个大小就换一份，免得夜里断流刷屏把存储写满。
+LOG_MAX=$((5 * 1024 * 1024))
+
+# 重试间隔：micam 自己会退避重连，这一层只是它彻底放弃之后的兜底。
+RESTART_DELAY=15
+
+# $0 可能是相对路径，而 __supervise 是在后台且换了目录跑的，先固定成绝对路径。
+SELF=$0
+case "$SELF" in
+/*) ;;
+*) SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")" ;;
+esac
+
+say() { echo "micam: $*" >>"${TRIM_TEMP_LOGFILE:-/dev/null}"; }
+
+# 配置只来自 micam.env：监听地址、端口、token 路径、数据目录由本脚本决定，
+# 同一个事实只写一处。
+load_env() {
+    [ -f "$ENVFILE" ] || return 0
+    set -a
+    # shellcheck disable=SC1090
+    . "$ENVFILE"
+    set +a
+    return 0
+}
+
+prepare_env() {
+    export MICAM_BIND=0.0.0.0
+    export MICAM_PORT="${TRIM_SERVICE_PORT:-8554}"
+    export MICAM_PASS_TOKEN_FILE="$TOKENFILE"
+    export MICAM_DATA_DIR="$PKGVAR/data"
+}
+
+configured() {
+    [ -n "${MICAM_DID:-}" ] || return 1
+    [ -s "$TOKENFILE" ] && return 0
+    [ -f "$PKGVAR/data/credentials.json" ]
+}
+
+pid_of() { cat "$PIDFILE" 2>/dev/null || true; }
+
+running() {
+    pid=$(pid_of)
+    [ -n "$pid" ] || return 1
+    kill -0 "$pid" 2>/dev/null
+}
+
+# 按进程组发信号：看守循环是会话首领，micam 是它的子进程。
+kill_group() {
+    signal=$1
+    pid=$2
+    if [ -x /bin/kill ]; then
+        /bin/kill -"$signal" -- "-$pid" 2>/dev/null && return 0
+    fi
+    kill -"$signal" "$pid" 2>/dev/null || true
+}
+
+rotate_log() {
+    [ -f "$LOG" ] || return 0
+    size=$(wc -c <"$LOG" 2>/dev/null || echo 0)
+    if [ "$size" -gt "$LOG_MAX" ]; then
+        mv -f "$LOG" "$LOG.1"
+    fi
+    return 0
+}
+
+do_start() {
+    if running; then
+        return 0
+    fi
+    rm -f "$PIDFILE"
+
+    if [ ! -x "$BIN" ]; then
+        say "找不到可执行文件 ${BIN}，请重新安装"
+        return 1
+    fi
+
+    load_env
+    prepare_env
+    if ! configured; then
+        # 不留下一个每 15 秒重试一次的循环：把话说清楚，状态交给应用中心显示。
+        say "尚未配置：请在「应用设置」里填写账号、passToken 与摄像头 DID"
+        return 0
+    fi
+
+    rotate_log
+    if command -v setsid >/dev/null 2>&1; then
+        nohup setsid "$SELF" __supervise >>"$LOG" 2>&1 </dev/null &
+    else
+        nohup "$SELF" __supervise >>"$LOG" 2>&1 </dev/null &
+    fi
+
+    # 等它把 pid 落盘，别在状态还没写下来时就告诉应用中心"启动成功"。
+    i=0
+    while [ "$i" -lt 30 ]; do
+        running && return 0
+        i=$((i + 1))
+        sleep 0.1 2>/dev/null || sleep 1
+    done
+
+    say "启动超时，详情见 $LOG"
+    return 1
+}
+
+do_stop() {
+    if ! running; then
+        rm -f "$PIDFILE"
+        return 0
+    fi
+
+    pid=$(pid_of)
+
+    # 首选整组收掉（setsid 时父与子是同一进程组）；没有 setsid 的平台退化成
+    # 只发看守循环，它会把 TERM 转给 micam 再自己退出。
+    kill_group TERM "$pid"
+    i=0
+    while [ "$i" -lt 200 ]; do
+        kill -0 "$pid" 2>/dev/null || break
+        i=$((i + 1))
+        sleep 0.1 2>/dev/null || sleep 1
+    done
+    kill_group KILL "$pid"
+
+    rm -f "$PIDFILE"
+    return 0
+}
+
+# start_child 拉起服务进程。
+#
+# run-as: package 时脚本本来就是包用户；如果平台以 root 执行生命周期脚本，这里降到
+# 包用户再跑，别让一个对外收流的进程拿到 root。
+start_child() {
+    if [ "$(id -u)" = 0 ] && [ -n "${TRIM_USERNAME:-}" ] \
+        && [ "$TRIM_USERNAME" != root ] && command -v runuser >/dev/null 2>&1; then
+        runuser -u "$TRIM_USERNAME" -- "$BIN" &
+    else
+        "$BIN" &
+    fi
+    child=$!
+}
+
+do_supervise() {
+    echo $$ >"$PIDFILE"
+
+    child=
+    stopping=0
+    # 收到 TERM 就转给孩子，并停止再看守：stop 只 kill 这个 pid 也够用，即使
+    # 平台没有 setsid、进程组收不掉。
+    # shellcheck disable=SC2015
+    trap 'stopping=1; [ -n "$child" ] && kill -TERM "$child" 2>/dev/null || true' TERM INT
+
+    while [ "$stopping" = 0 ]; do
+        load_env
+        prepare_env
+
+        # 放后台再 wait：这样 trap 能立刻打断等待，而不是等 micam 自己退出。
+        start_child
+        rc=0
+        wait "$child" || rc=$?
+        child=
+
+        [ "$stopping" = 1 ] && break
+
+        case "$rc" in
+        0) break ;; # 正常退出：收到信号，或者 --dump 跑完了
+        6) break ;; # 端口被占用，重启只会重复失败
+        esac
+
+        echo "micam exited with $rc, restarting in ${RESTART_DELAY}s" >>"$LOG"
+        sleep "$RESTART_DELAY" &
+        wait $! || true
+    done
+
+    exit 0
 }
 
 case "${1:-}" in
-start)
-    compose up -d
-    ;;
-stop)
-    compose down
-    ;;
+start) do_start ;;
+stop) do_stop ;;
 status)
-    running=$(compose ps -q 2>/dev/null || true)
-    if [ -n "$running" ]; then
+    if running; then
         exit 0
     fi
     exit 3
     ;;
+__supervise) do_supervise ;;
 *)
-    echo "unknown command: ${1:-}" >> "${TRIM_TEMP_LOGFILE:-/dev/null}"
+    say "未知命令：${1:-}"
     exit 1
     ;;
 esac
+
+exit 0

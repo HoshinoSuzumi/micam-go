@@ -1,10 +1,11 @@
 #!/bin/sh
-# 安装前：如果还有本应用的旧容器占着端口，先停掉。
+# 安装前：如果还留着容器版的旧容器，先停掉，免得它占着 8554。
 set -eu
 
-COMPOSE_FILE="${TRIM_APPDEST:-/var/apps/micam/target}/docker/docker-compose.yaml"
+APP="${TRIM_APPNAME:-micam}"
 
-if [ -f "$COMPOSE_FILE" ]; then
-    docker compose -f "$COMPOSE_FILE" -p micam down 2>/dev/null || true
+if command -v docker >/dev/null 2>&1; then
+    docker rm -f "$APP" >/dev/null 2>&1 || true
 fi
+
 exit 0

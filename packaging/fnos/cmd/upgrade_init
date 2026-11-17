@@ -1,10 +1,8 @@
 #!/bin/sh
-# 升级前：停容器，避免旧版本进程占着 8554。
+# 升级前：停服务，避免旧版本进程占着 8554。
 set -eu
 
-COMPOSE_FILE="${TRIM_APPDEST:-/var/apps/micam/target}/docker/docker-compose.yaml"
+HERE=$(cd "$(dirname "$0")" && pwd)
+"$HERE/main" stop || true
 
-if [ -f "$COMPOSE_FILE" ]; then
-    docker compose -f "$COMPOSE_FILE" -p micam down 2>/dev/null || true
-fi
 exit 0

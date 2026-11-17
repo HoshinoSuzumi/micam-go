@@ -42,18 +42,16 @@ docker-push-multi:
 	docker buildx build --platform linux/amd64,linux/arm64 \
 		-t $(IMAGE):$(TAG) -t $(IMAGE):latest --push .
 
-# Build the fnOS application package. Needs fnpack:
+# Build the fnOS application package(s). Needs fnpack:
 # https://developer.fnnas.com/docs/cli/fnpack
+#
+# 服务是静态二进制，所以每种架构一个包：make fpk ARCHS=amd64 只出 x86 的。
+ARCHS ?= amd64 arm64
 fpk:
 	@command -v fnpack >/dev/null 2>&1 || { \
 		echo "fnpack not found - download it from https://developer.fnnas.com/docs/cli/fnpack"; \
 		exit 1; }
-	fnpack build --directory packaging/fnos
-	@version=$$(sed -n 's/^version="\(.*\)"/\1/p' packaging/fnos/manifest); \
-	for f in *.fpk; do \
-		[ -e "$$f" ] || continue; \
-		mv -v "$$f" "micam_$$version.fpk"; \
-	done
+	@for arch in $(ARCHS); do ./packaging/build-fpk.sh $$arch || exit 1; done
 
 clean:
 	rm -rf bin

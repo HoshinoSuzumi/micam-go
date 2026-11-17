@@ -1,10 +1,14 @@
 #!/bin/sh
-# 卸载前：停容器。
+# 卸载前：停服务，收掉容器版可能遗留的容器。
 set -eu
 
-COMPOSE_FILE="${TRIM_APPDEST:-/var/apps/micam/target}/docker/docker-compose.yaml"
+APP="${TRIM_APPNAME:-micam}"
+HERE=$(cd "$(dirname "$0")" && pwd)
 
-if [ -f "$COMPOSE_FILE" ]; then
-    docker compose -f "$COMPOSE_FILE" -p micam down 2>/dev/null || true
+"$HERE/main" stop || true
+
+if command -v docker >/dev/null 2>&1; then
+    docker rm -f "$APP" >/dev/null 2>&1 || true
 fi
+
 exit 0

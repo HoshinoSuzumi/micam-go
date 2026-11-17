@@ -1,0 +1,75 @@
+#!/bin/sh
+# 把当前源码打包成某个架构的 fpk：
+#
+#   ./packaging/build-fpk.sh amd64     -> micam_<版本>_amd64.fpk  (platform=x86)
+#   ./packaging/build-fpk.sh arm64     -> micam_<版本>_arm64.fpk  (platform=arm)
+#
+# 服务以静态二进制运行，所以包里是 arch 专属的可执行文件，manifest 的 platform
+# 必须跟着改成 x86 / arm（官方要求 all 只用于不含架构二进制的包）。
+#
+# 需要 fnpack：https://developer.fnnas.com/docs/cli/fnpack
+set -eu
+
+ARCH="${1:-}"
+case "$ARCH" in
+amd64) PLATFORM=x86 ;;
+arm64) PLATFORM=arm ;;
+*)
+    echo "用法: $0 amd64|arm64" >&2
+    exit 1
+    ;;
+esac
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+SRC="$ROOT/packaging/fnos"
+BUILD="$ROOT/.tmp/fpk-$ARCH"
+
+if [ ! -f "$SRC/manifest" ]; then
+    echo "找不到 $SRC/manifest" >&2
+    exit 1
+fi
+
+VERSION=$(sed -n 's/^version="\(.*\)"/\1/p' "$SRC/manifest")
+if [ -z "$VERSION" ]; then
+    echo "manifest 里没有 version=\"...\"" >&2
+    exit 1
+fi
+
+command -v fnpack >/dev/null 2>&1 || {
+    echo "找不到 fnpack，先安装：https://developer.fnnas.com/docs/cli/fnpack" >&2
+    exit 1
+}
+
+# 在临时目录里组装，避免把二进制留在源码树里，也方便一个版本出两种架构。
+rm -rf "$BUILD"
+mkdir -p "$BUILD"
+(cd "$SRC" && tar cf - --exclude=bin .) | (cd "$BUILD" && tar xf -)
+
+mkdir -p "$BUILD/app/bin"
+CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" \
+    go build -trimpath -ldflags="-s -w" \
+    -o "$BUILD/app/bin/micam" "$ROOT/cmd/micam"
+
+# platform 按架构改写；sed -i.bak 在 GNU 和 BSD 上都能用。
+sed -i.bak "s|^platform=.*|platform=\"$PLATFORM\"|" "$BUILD/manifest"
+rm -f "$BUILD/manifest.bak"
+
+grep -n '^version=' "$BUILD/manifest"
+grep -n '^platform=' "$BUILD/manifest"
+
+OUT="$ROOT/micam_${VERSION}_${ARCH}.fpk"
+rm -f "$ROOT/micam.fpk" "$OUT"
+
+(cd "$ROOT" && fnpack build --directory "$BUILD")
+
+# fnpack 用 manifest.appname 当文件名，统一改成带版本和架构的。
+if [ -f "$ROOT/micam.fpk" ]; then
+    mv -f "$ROOT/micam.fpk" "$OUT"
+fi
+
+if [ ! -f "$OUT" ]; then
+    echo "打包失败：没有生成 $OUT" >&2
+    exit 1
+fi
+
+echo "$OUT"

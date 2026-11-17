@@ -21,3 +21,7 @@
 # captures produced by --dump and by curl
 *.h265
 *.ts
+
+# fpk build output
+/packaging/fnos/app/bin/
+/micam_*.fpk

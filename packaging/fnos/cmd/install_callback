@@ -1,19 +1,20 @@
 #!/bin/sh
-# 安装后：准备配置目录、默认 env 与空的 token 文件。
+# 安装后：准备配置目录、默认 env 与空的 token 文件，并把容器版留下的东西收拾干净。
 #
-# micam.env 只放"用户可配置"的值：账号、DID、清晰度这类。端口、监听地址、
-# token 路径由 docker-compose.yaml 决定 —— 同一个事实只写一处，否则改了挂载点
-# 而忘了改这里，程序就会去找一个不存在的文件（踩过）。
+# micam.env 只放"用户可配置"的值：账号、DID、清晰度这类。监听地址、端口、token
+# 路径、数据目录由 cmd/main 决定 —— 同一个事实只写一处，否则改了挂载点而忘了改
+# 这里，程序就会去找一个不存在的文件（踩过）。
 set -eu
 
-ETC="${TRIM_PKGETC:-/var/apps/micam/etc}"
-VAR="${TRIM_PKGVAR:-/var/apps/micam/var}"
+APP="${TRIM_APPNAME:-micam}"
+PKGETC="${TRIM_PKGETC:-/var/apps/$APP/etc}"
+PKGVAR="${TRIM_PKGVAR:-/var/apps/$APP/var}"
 
-mkdir -p "$ETC" "$VAR"
+mkdir -p "$PKGETC" "$PKGVAR/data"
 
-if [ ! -f "$ETC/micam.env" ]; then
+if [ ! -f "$PKGETC/micam.env" ]; then
     umask 077
-    cat > "$ETC/micam.env" <<'EOF'
+    cat >"$PKGETC/micam.env" <<'EOF'
 MICAM_REGION=cn
 MICAM_QUALITY=3
 MICAM_PTS_LEAD=100
@@ -22,24 +23,36 @@ MICAM_RECONNECT=5
 EOF
 fi
 
-if [ ! -f "$ETC/pass_token" ]; then
+if [ ! -f "$PKGETC/pass_token" ]; then
     umask 077
-    : > "$ETC/pass_token"
+    : >"$PKGETC/pass_token"
 fi
 
-# 老版本的 micam.env 里还写着监听地址、端口和 token 路径。这些现在由
-# docker-compose.yaml 决定，留在文件里会盖掉 compose 的设置，删掉。
-if [ -f "$ETC/micam.env" ]; then
-    sed -i '/^MICAM_BIND=/d; /^MICAM_PORT=/d; /^MICAM_PASS_TOKEN_FILE=/d' "$ETC/micam.env" || true
+# 老版本的 micam.env 里还写着监听地址、端口和 token 路径。这些现在由 cmd/main
+# 决定，留在文件里会盖掉它，删掉。
+sed -i.bak '/^MICAM_BIND=/d; /^MICAM_PORT=/d; /^MICAM_PASS_TOKEN_FILE=/d; /^MICAM_DATA_DIR=/d' \
+    "$PKGETC/micam.env" 2>/dev/null || true
+rm -f "$PKGETC/micam.env.bak"
+
+# 容器版的凭据在 var/.micam（容器里 HOME=/data → /data/.micam）。搬到新位置，
+# 从旧包装上来的用户不必重新登录。
+if [ -f "$PKGVAR/.micam/credentials.json" ] && [ ! -f "$PKGVAR/data/credentials.json" ]; then
+    cp -f "$PKGVAR/.micam/credentials.json" "$PKGVAR/data/credentials.json"
 fi
 
-chmod 600 "$ETC/micam.env" "$ETC/pass_token" 2>/dev/null || true
+chmod 600 "$PKGETC/micam.env" "$PKGETC/pass_token"
+chmod 700 "$PKGVAR/data" 2>/dev/null || true
 
-# 容器里的 entrypoint 以 uid 10001 读取这两个文件，所以要交给它；0600 保证
-# 其他用户仍然读不到。
-chown 10001:10001 "$ETC/micam.env" "$ETC/pass_token" 2>/dev/null || true
+# 从容器版升级上来时，旧容器还占着 8554，而且已经不归这个包管了。
+if command -v docker >/dev/null 2>&1; then
+    docker rm -f "$APP" >/dev/null 2>&1 || true
+fi
 
-# 容器以 uid 10001 运行（Dockerfile 里的 micam 用户），数据目录必须让它可写。
-chown -R 10001:10001 "$VAR" 2>/dev/null || true
+# 正常情况下脚本就以包用户运行。万一以 root 跑（老包是 run-as: root），把文件
+# 交还给应用用户，否则 0600 的配置服务进程读不到。
+if [ "$(id -u)" = 0 ] && [ -n "${TRIM_UID:-}" ]; then
+    chown "$TRIM_UID:${TRIM_GID:-$TRIM_UID}" "$PKGETC/micam.env" "$PKGETC/pass_token" 2>/dev/null || true
+    chown -R "$TRIM_UID:${TRIM_GID:-$TRIM_UID}" "$PKGVAR" 2>/dev/null || true
+fi
 
 exit 0
