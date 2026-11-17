@@ -152,6 +152,16 @@ func (c *Conn) watchdog() {
 	}
 }
 
+// ArmIdle starts the media clock without waiting for a frame.
+//
+// The watchdog stays quiet until media arrives, because the authentication
+// handshake is legitimately silent. Once video is requested that exemption runs
+// out: a camera that accepts the request and then sends nothing is exactly as dead
+// as one that vanished, and without this the session would wait forever.
+func (c *Conn) ArmIdle() {
+	c.lastMedia.Store(time.Now().UnixNano())
+}
+
 // Done is closed when the session ends.
 func (c *Conn) Done() <-chan struct{} { return c.closed }
 

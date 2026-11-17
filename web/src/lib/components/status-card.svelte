@@ -1,16 +1,40 @@
 <script lang="ts">
   import type { AppStatus } from "$lib/api";
-  import { formatCount, formatDuration, formatFPS, stateLabel, stateTone } from "$lib/format";
-  import { Badge, Card, CardContent, CardHeader, CardTitle } from "./ui";
+  import { formatCount, formatDuration, formatFPS } from "$lib/format";
+  import { Card, CardContent, CardHeader, CardTitle } from "./ui";
 
   let { app }: { app: AppStatus } = $props();
 
-  // A one-second tick keeps the uptime moving without re-fetching anything.
+  // A one-second tick keeps the elapsed time moving without re-fetching anything.
   let now = $state(Date.now());
   $effect(() => {
     const timer = setInterval(() => (now = Date.now()), 1000);
     return () => clearInterval(timer);
   });
+
+  let since = $derived(app.since ? new Date(app.since).getTime() : 0);
+  let elapsed = $derived(since ? Math.max(0, (now - since) / 1000) : 0);
+
+  // "连接中" covers five different waits; say which one and for how long, otherwise
+  // a wedged session looks exactly like a fast one.
+  const stageLabel: Record<string, string> = {
+    provisioning: "向米家云申请参数",
+    dialing: "连接摄像头",
+    authenticating: "认证",
+    "starting-video": "请求视频",
+  };
+
+  let detail = $derived.by(() => {
+    if (!app.running) return "";
+    if (app.state === "connecting") {
+      const stage = app.stage ? (stageLabel[app.stage] ?? app.stage) : "准备中";
+      return `${stage} · ${formatDuration(elapsed)}`;
+    }
+    if (app.state === "retrying") return "等待重连";
+    return "";
+  });
+
+  let slow = $derived(app.state === "connecting" && elapsed > 20);
 
   // A loopback bind looks healthy from the NAS and is unreachable from anywhere
   // else: worth saying out loud.
@@ -19,7 +43,7 @@
   );
 
   let uptime = $derived(
-    app.since ? Math.max(0, (now - new Date(app.since).getTime()) / 1000) : 0,
+    app.state === "streaming" && since ? Math.max(0, (now - since) / 1000) : 0,
   );
 
   const rows = $derived([
@@ -30,27 +54,25 @@
     { label: "已转发", value: `${formatCount(app.frames)} 帧` },
     { label: "观看", value: `${app.viewers} 人` },
     { label: "重同步", value: String(app.resyncs) },
-    { label: "已运行", value: app.state === "streaming" ? formatDuration(uptime) : "—" },
+    { label: "已运行", value: uptime > 0 ? formatDuration(uptime) : "—" },
     { label: "监听", value: app.bind || "—" },
   ]);
 </script>
 
 <Card>
-  <CardHeader class="flex-row items-center justify-between gap-3">
-    <div class="flex flex-col gap-1">
-      <CardTitle>连接状态</CardTitle>
-      <p class="text-xs text-muted-foreground">
-        {#if app.running}
-          pid {app.pid} · 第 {app.session || 1} 次会话
-        {:else}
-          服务未运行
+  <CardHeader>
+    <CardTitle>连接状态</CardTitle>
+    <p class="text-xs text-muted-foreground">
+      {#if app.running}
+        pid {app.pid} · 第 {app.session || 1} 次会话
+        {#if detail}
+          ·
+          <span class={slow ? "text-amber-600 dark:text-amber-400" : ""}>{detail}</span>
         {/if}
-      </p>
-    </div>
-    <Badge tone={stateTone[app.state]}>
-      <span class="size-1.5 rounded-full bg-current"></span>
-      {stateLabel[app.state]}
-    </Badge>
+      {:else}
+        服务未运行
+      {/if}
+    </p>
   </CardHeader>
 
   <CardContent class="space-y-3">
@@ -65,6 +87,15 @@
       {/each}
     </dl>
 
+    {#if slow}
+      <p
+        class="rounded-md border border-amber-500/30 bg-amber-500/8 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
+      >
+        连接已经花了 {formatDuration(elapsed)}。超过 15 秒还没出画面，多半是摄像头不在线
+        （或不在同一网段），看下面的日志确认卡在哪一步。
+      </p>
+    {/if}
+
     {#if loopback}
       <p
         class="rounded-md border border-amber-500/30 bg-amber-500/8 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
@@ -77,7 +108,9 @@
     {/if}
 
     {#if app.error}
-      <p class="rounded-md border border-destructive/30 bg-destructive/8 px-3 py-2 font-mono text-xs break-words text-destructive">
+      <p
+        class="rounded-md border border-destructive/30 bg-destructive/8 px-3 py-2 font-mono text-xs break-words text-destructive"
+      >
         {app.error}
       </p>
     {/if}

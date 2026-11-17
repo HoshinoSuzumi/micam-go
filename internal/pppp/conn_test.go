@@ -176,3 +176,46 @@ func TestConnErrIsNilAfterALocalClose(t *testing.T) {
 		t.Fatalf("Err() = %v, want nil after a local close", err)
 	}
 }
+
+// A camera that accepts "start video" and then sends nothing is as dead as one
+// that disconnected: without arming the clock the watchdog would wait for a first
+// frame that never comes, and the session would hang in "connecting" forever.
+func TestConnWatchdogFiresWhenVideoNeverStarts(t *testing.T) {
+	oldIdle, oldInterval := mediaIdleTimeout, watchdogInterval
+	mediaIdleTimeout, watchdogInterval = 50*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { mediaIdleTimeout, watchdogInterval = oldIdle, oldInterval })
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	link, err := DialTCP(listener.Addr().String(), 2*time.Second)
+	if err != nil {
+		t.Fatalf("DialTCP: %v", err)
+	}
+
+	conn := NewConn(link, Addr{}, discardLogger())
+	conn.Start()
+	defer conn.Close()
+
+	camera, err := listener.Accept()
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	defer camera.Close()
+
+	// What streamSession does right after asking for video: no media has arrived.
+	conn.ArmIdle()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, ok := conn.NextMedia(ctx); ok {
+		t.Fatal("no media should have been delivered")
+	}
+	if !errors.Is(conn.Err(), ErrMediaIdle) {
+		t.Fatalf("Err() = %v, want ErrMediaIdle", conn.Err())
+	}
+}

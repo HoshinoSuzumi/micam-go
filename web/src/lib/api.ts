@@ -21,6 +21,8 @@ export interface AppStatus {
   running: boolean;
   pid: number;
   state: StreamState;
+  /** stage refines "connecting": provisioning, dialing, authenticating, starting-video. */
+  stage?: string;
   session: number;
   camera?: string;
   transport?: string;

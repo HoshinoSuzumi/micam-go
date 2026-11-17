@@ -108,8 +108,7 @@
       </Button>
     </div>
 
-    <div class="space-y-1">
-      <p class="text-[11px] tracking-wide text-muted-foreground uppercase">点一下复制命令</p>
+    <div class="-mt-1 space-y-0.5">
       {#each commands as command (command.id)}
         <button
           type="button"

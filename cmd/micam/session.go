@@ -169,6 +169,7 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 
 	rep.BeginSession(session)
 	rep.SetState(status.StateConnecting, nil)
+	rep.Stage(status.StageProvisioning)
 
 	keys, err := miss.GenerateKeys()
 	if err != nil {
@@ -195,6 +196,7 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 		return outcome{code: exitSession}
 	}
 
+	rep.Stage(status.StageDialing)
 	link, local, err := dialCamera(ctx, opts, target, uid, prov, log)
 	if err != nil {
 		log.Error("cannot reach the camera", "err", err)
@@ -207,6 +209,7 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 	conn.Start()
 	defer conn.Close()
 
+	rep.Stage(status.StageAuthenticating)
 	media := miss.NewClient(conn)
 	if _, err := media.Authenticate(ctx, keys.PublicHex(), prov.Sign, 15*time.Second); err != nil {
 		log.Error("MISS authentication failed", "err", err)
@@ -220,12 +223,17 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 	}
 	media.UseSessionKey(key)
 
+	rep.Stage(status.StageStartingVideo)
 	log.Info("requesting video", "quality", opts.Quality, "pts_lead_ms", opts.PTSLeadMS)
 	if err := media.StartVideo(opts.Quality, false); err != nil {
 		log.Error("cannot start the video stream", "err", err)
 		return outcome{code: exitSession, retryable: true, err: err}
 	}
 	defer func() { _ = media.StopVideo() }()
+
+	// From here the camera is supposed to be sending. If it never does, the
+	// watchdog must not sit on its "no frames yet" exemption forever.
+	conn.ArmIdle()
 
 	// From here on the camera considers the session live, so this is where the
 	// health clock starts.

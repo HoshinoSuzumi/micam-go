@@ -27,6 +27,8 @@ type AppStatus struct {
 	Running bool         `json:"running"`
 	PID     int          `json:"pid"`
 	State   status.State `json:"state"`
+	// Stage refines a "connecting" state.
+	Stage status.Stage `json:"stage,omitempty"`
 
 	Session   int    `json:"session"`
 	Camera    string `json:"camera,omitempty"`
@@ -215,6 +217,7 @@ func (s *Server) snapshot(actionErr error) StatusResponse {
 	snap, readErr := status.Read(s.Paths.StatusFile())
 	if readErr == nil {
 		app.State = snap.State
+		app.Stage = snap.Stage
 		app.Session = snap.Session
 		app.Camera = snap.Camera
 		app.Transport = snap.Transport

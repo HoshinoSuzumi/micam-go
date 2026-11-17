@@ -38,9 +38,23 @@ type StreamURL struct {
 	Iface string `json:"iface,omitempty"`
 }
 
+// Stage says what "connecting" is actually doing. The state alone covers five
+// different waits of very different lengths, so "连接中" could mean anything from
+// "asking the cloud" to "waiting for a frame that never comes".
+type Stage string
+
+const (
+	StageProvisioning   Stage = "provisioning"
+	StageDialing        Stage = "dialing"
+	StageAuthenticating Stage = "authenticating"
+	StageStartingVideo  Stage = "starting-video"
+)
+
 // Snapshot is the JSON document written to the status file.
 type Snapshot struct {
 	State State `json:"state"`
+	// Stage refines State while it is "connecting".
+	Stage Stage `json:"stage,omitempty"`
 	// Session counts attempts within this process, so a restarting stream is
 	// visible even when the state is briefly "connecting" again.
 	Session   int    `json:"session"`
@@ -207,7 +221,10 @@ func (r *Reporter) BeginSession(n int) {
 	r.snap.FPS = 0
 	r.snap.Viewers = 0
 	r.snap.Resyncs = 0
-	r.snap.Since = time.Time{}
+	// Since marks the start of the attempt, so the UI can show how long a stuck
+	// "connecting" has been going on.
+	r.snap.Since = r.now()
+	r.snap.Stage = ""
 	r.snap.Bind = ""
 	r.snap.URLs = nil
 	r.frames = 0
@@ -226,6 +243,16 @@ func (r *Reporter) Bind(addr string, urls []StreamURL) {
 	r.snap.URLs = urls
 }
 
+// Stage records what the current attempt is doing.
+func (r *Reporter) Stage(stage Stage) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.snap.Stage = stage
+}
+
 // Connected records how the camera was reached, and when the session started.
 func (r *Reporter) Connected(camera, transport string) {
 	if r == nil {
@@ -236,6 +263,7 @@ func (r *Reporter) Connected(camera, transport string) {
 	r.snap.Camera = camera
 	r.snap.Transport = transport
 	r.snap.Since = r.now()
+	r.snap.Stage = ""
 }
 
 // Frame counts one relayed video frame.
