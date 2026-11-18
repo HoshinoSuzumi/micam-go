@@ -12,6 +12,7 @@ package ts
 // drift apart.
 type Clock struct {
 	started   bool
+	origin    int64
 	previous  int64
 	elapsedMS int64
 }
@@ -26,6 +27,7 @@ func (c *Clock) Advance(timestampMS int64) int64 {
 		// reporting negative values, and a sentinel would read as "not started"
 		// forever, freezing the clock.
 		c.started = true
+		c.origin = timestampMS
 		c.previous = timestampMS
 		return c.elapsedMS
 	}
@@ -46,6 +48,11 @@ func (c *Clock) Advance(timestampMS int64) int64 {
 // Audio cannot use its own clock: it may start seconds after the video (or only
 // when there is noise), and normalising it independently would shift the sound
 // against the picture by however long that gap was.
+//
+// It must be the first timestamp, not the latest: returning the moving "previous"
+// value made every audio packet look like it happened at the start of the stream,
+// which put the audio track a hundred seconds away from the video and stalled
+// playback a couple of seconds in.
 func (c *Clock) Origin() (int64, bool) {
-	return c.previous, c.started
+	return c.origin, c.started
 }

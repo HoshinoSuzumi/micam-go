@@ -2,6 +2,7 @@ package hls
 
 import (
 	"bytes"
+	"encoding/binary"
 	"regexp"
 	"strings"
 	"testing"
@@ -226,6 +227,120 @@ func TestInitSurvivesAParameterSetChange(t *testing.T) {
 	if s.Segments() == 0 {
 		t.Fatal("no segment was produced after the parameter set change")
 	}
+}
+
+// TestAudioTimelineFollowsTheVideo pins the two tracks to the same clock.
+//
+// It was broken once by returning the *latest* timestamp as the origin: every
+// audio packet then looked like it happened at the start of the stream, so a
+// 3-second segment carried an audio track claiming 106 seconds and starting a
+// hundred seconds before the picture. Players played a couple of seconds and then
+// waited forever for audio that was never going to arrive at the right time.
+func TestAudioTimelineFollowsTheVideo(t *testing.T) {
+	s := New(DefaultWindow, true)
+
+	// Camera timestamps that do not start at zero, like the epoch milliseconds
+	// some models report.
+	base := int64(1_700_000_000_000)
+
+	s.Write(accessUnit(t, nalTypeIDRWRADL, base, true))
+	for i := 1; i <= 40; i++ {
+		s.Write(accessUnit(t, nalTypeTrailR, base+int64(i)*50, false))
+		if i%2 == 0 {
+			s.Write(miss.Packet{
+				Codec:       miss.CodecOpus,
+				TimestampMS: base + int64(i)*50,
+				Payload:     []byte{0xF8, 1, 2, 3},
+			})
+		}
+	}
+	s.Write(accessUnit(t, nalTypeIDRWRADL, base+41*50, true))
+
+	// A second GOP, so the segment under test does not start at zero: the bug put
+	// audio at tfdt 0 while the video was a hundred seconds in, which the first
+	// segment cannot show.
+	for i := 42; i <= 80; i++ {
+		s.Write(accessUnit(t, nalTypeTrailR, base+int64(i)*50, false))
+		if i%2 == 0 {
+			s.Write(miss.Packet{
+				Codec:       miss.CodecOpus,
+				TimestampMS: base + int64(i)*50,
+				Payload:     []byte{0xF8, 1, 2, 3},
+			})
+		}
+	}
+	s.Write(accessUnit(t, nalTypeIDRWRADL, base+81*50, true))
+
+	segment, ok := s.Segment(1)
+	if !ok {
+		t.Fatal("the second segment was not produced")
+	}
+
+	timing := trafTiming(t, segment)
+	video, okV := timing[uint32(trackVideo)]
+	audio, okA := timing[uint32(trackAudio)]
+	if !okV || !okA {
+		t.Fatalf("timing found for video=%v audio=%v, want both", okV, okA)
+	}
+
+	// Both tracks cover the same wall-clock interval, so their decode times must
+	// agree to within one audio packet.
+	if delta := audio.tfdt - video.tfdt; delta < -18000 || delta > 18000 {
+		t.Fatalf("audio starts %d ticks (%.2fs) from the video: audio tfdt %d, video tfdt %d",
+			delta, float64(delta)/90000, audio.tfdt, video.tfdt)
+	}
+
+	// No single audio sample may be long: the bug gave one packet a duration of
+	// two seconds to make the totals add up.
+	if audio.max > 18000 {
+		t.Fatalf("longest audio sample is %d ticks (%.2fs), want at most 0.2s",
+			audio.max, float64(audio.max)/90000)
+	}
+}
+
+// trackTiming is what one traf says about its track.
+type trackTiming struct {
+	tfdt  int64 // decode time of the first sample
+	total int64 // sum of the sample durations
+	max   int64 // longest single sample
+}
+
+// trafTiming returns the timing of each track in a segment.
+func trafTiming(t *testing.T, segment []byte) map[uint32]trackTiming {
+	t.Helper()
+
+	moof := child(segment, 0, "moof")
+	if moof == nil {
+		t.Fatal("segment has no moof")
+	}
+
+	out := make(map[uint32]trackTiming)
+	for _, traf := range children(moof, 8, "traf") {
+		var track uint32
+		var timing trackTiming
+
+		if tfhd := child(traf, 8, "tfhd"); tfhd != nil {
+			track = binary.BigEndian.Uint32(tfhd[12:16])
+		}
+		if tfdt := child(traf, 8, "tfdt"); tfdt != nil {
+			timing.tfdt = int64(binary.BigEndian.Uint64(tfdt[12:20]))
+		}
+		if trun := child(traf, 8, "trun"); trun != nil {
+			count := int(binary.BigEndian.Uint32(trun[12:16]))
+			for i := 0; i < count; i++ {
+				at := 20 + i*12
+				duration := int64(binary.BigEndian.Uint32(trun[at : at+4]))
+				timing.total += duration
+				if duration > timing.max {
+					timing.max = duration
+				}
+			}
+		}
+
+		out[track] = timing
+	}
+
+	return out
 }
 
 func TestIgnoresWhatItCannotPackage(t *testing.T) {
