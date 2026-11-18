@@ -138,8 +138,16 @@ func (s *Segmenter) Write(p miss.Packet) error {
 		if info, err := parseSPS(s.params.sps); err == nil {
 			s.info = info
 			s.hasSPS = true
-			s.init = nil // rebuild from the new parameter sets
-			s.initName = ""
+			// Rebuild now, not later. The init used to be dropped here and
+			// rebuilt only in the "stream has not started" branch below, so a
+			// camera that re-sent its parameter sets mid-stream left the playlist
+			// with no EXT-X-MAP for the rest of the session: players then had no
+			// hvcC and could not build a decoder, hours after everything had been
+			// working.
+			if s.ready() {
+				s.init = buildInit(s.info, s.params)
+				s.initName = initFileName(s.init)
+			}
 		}
 	}
 
@@ -214,6 +222,18 @@ func hasIRAP(nals [][]byte) bool {
 // that starts the next one.
 func (s *Segmenter) flush(endMS int64) {
 	if len(s.pending) == 0 {
+		return
+	}
+
+	// A playlist must never advertise media without the init segment that
+	// describes it: a player that fetches those segments has no hvcC and cannot
+	// decode a single frame. Dropping the fragments is the lesser evil, and it
+	// cannot happen silently for long because the next keyframe rebuilds the init.
+	if s.init == nil {
+		s.pending = s.pending[:0]
+		s.arrivals = s.arrivals[:0]
+		s.started = false
+		s.dropped++
 		return
 	}
 
