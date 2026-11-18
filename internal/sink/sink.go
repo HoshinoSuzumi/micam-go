@@ -21,6 +21,14 @@ type Sink interface {
 	Close() error
 }
 
+// AudioWriter is implemented by sinks that can also carry the camera's sound.
+//
+// Not every sink can: the MPEG-TS muxer declares a second elementary stream for
+// it, while a format without room for Opus simply drops the frames.
+type AudioWriter interface {
+	WriteAudio(p miss.Packet) error
+}
+
 // Factory builds a sink for one connection.
 //
 // The codec is only known once the first frame arrives, which is why this is a
@@ -28,9 +36,9 @@ type Sink interface {
 type Factory func(w io.Writer, codec uint32) Sink
 
 // TS is the MPEG-TS factory, and the default when no other is configured.
-func TS(leadMS int) Factory {
+func TS(leadMS int, withAudio bool) Factory {
 	return func(w io.Writer, codec uint32) Sink {
-		return &tsSink{m: ts.NewMuxerWithLead(w, codec, leadMS)}
+		return &tsSink{m: ts.NewMuxerWithAudio(w, codec, leadMS, withAudio)}
 	}
 }
 
@@ -39,5 +47,8 @@ type tsSink struct {
 }
 
 func (s *tsSink) Write(p miss.Packet) error { return s.m.Write(p) }
+
+// WriteAudio is what makes the transport stream carry sound.
+func (s *tsSink) WriteAudio(p miss.Packet) error { return s.m.WriteAudio(p) }
 
 func (s *tsSink) Close() error { return s.m.Flush() }

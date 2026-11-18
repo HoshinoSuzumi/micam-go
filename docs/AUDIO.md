@@ -375,11 +375,29 @@ Apple 的 HLS 规范只列 AAC，Opus 是"实现上能用、文档里没有"。i
 
 如果真机验证失败，唯一出路是 AAC（§4.2 的 B2），那需要 cgo 编码器，与静态单二进制冲突。
 
-## 13.5 还没做
+## 13.5 `/cam.wav` 的去留
 
-- **TS 里的音频**：Opus 可以进 MPEG-TS（§12.2 实测过），`ts.Muxer` 加一个 `stream_type 0x06`
-  + `Opus` 注册描述符的 PID 即可，约 1 天。播放器支持比 fMP4 窄得多，等确认需要再做。
-- **`/cam.wav` 的去留**：对 Opus 相机它永远只有头。保留是因为 PCMA 相机（其它型号）仍然适用。
+对 Opus 相机它永远只有头。保留是因为 PCMA 相机（其它型号）仍然适用。
+
+## 13.8 TS 音轨（2026-11-18）
+
+OBS 在局域网里拉 TS 的延迟比 HLS 低，所以 TS 也需要声音。Opus 进 MPEG-TS 的形状（照 ffmpeg 的参考实现）：
+
+```
+PMT: stream_type=0x06  PID=0x0101  PCR 仍在视频 PID
+     ES 描述符: 05 04 'Opus'   7f 02 80 01
+PES: stream_id=0xBD，带真实长度，只有 PTS
+```
+
+实现要点：
+
+- `ts.Muxer` 的 `writeVideo` 抽成 `writeElementary(pid, counter, pes, unit, withPCR, ...)`，
+  视频和音频共用分包逻辑；音频包不带 PCR。
+- `sink.AudioWriter` 接口：能带声音的 sink 实现 `WriteAudio`，不能的（或未开启音频的）直接丢弃。
+- 音频时间轴同样以视频时钟的原点为基准（和 HLS 一致），否则音画会错开。
+- PMT 的 section_length 随音轨存在与否变化，音频流从第一张表就声明，不会中途出现。
+
+验证：`ffprobe` 读我们生成的 TS 得到 `hevc` + `opus` 两条流。
 ## 13.6 真机验证（2026-11-18）
 
 `--audio` 打开后，线上分片的实测：

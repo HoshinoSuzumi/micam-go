@@ -24,10 +24,16 @@ const (
 	pidPAT   uint16 = 0x0000
 	pidPMT   uint16 = 0x1000
 	pidVideo uint16 = 0x0100
+	pidAudio uint16 = 0x0101
 
 	streamTypeH264 = 0x1B
 	streamTypeH265 = 0x24
-	streamIDVideo  = 0xE0
+	// streamTypePrivate is what a private stream carries; the codec inside is named
+	// by a registration descriptor. Opus in MPEG-TS is not given its own
+	// stream_type, so this is the shape ffmpeg writes and reads.
+	streamTypePrivate = 0x06
+	streamIDVideo     = 0xE0
+	streamIDPrivate   = 0xBD
 
 	// clockHz is the MPEG-TS timestamp clock.
 	clockHz = 90_000
@@ -61,6 +67,10 @@ type Muxer struct {
 	patCounter   byte
 	pmtCounter   byte
 	videoCounter byte
+	audioCounter byte
+
+	// withAudio declares a second elementary stream for the camera's Opus.
+	withAudio bool
 
 	clock Clock
 
@@ -94,6 +104,15 @@ func NewMuxerWithLead(w io.Writer, codec uint32, leadMS int) *Muxer {
 		ptsOffset:         int64(leadMS) * clockHz / 1000,
 		framesSinceTables: 1 << 30, // force the tables out on the first frame
 	}
+}
+
+// NewMuxerWithAudio is NewMuxerWithLead plus the private Opus stream. The PMT
+// declares it from the first table, so a player never sees an audio PID appear
+// mid-stream.
+func NewMuxerWithAudio(w io.Writer, codec uint32, leadMS int, withAudio bool) *Muxer {
+	m := NewMuxerWithLead(w, codec, leadMS)
+	m.withAudio = withAudio
+	return m
 }
 
 // Write emits one access unit, with the PAT/PMT when they are due.
@@ -157,10 +176,18 @@ func (m *Muxer) writePAT() error {
 }
 
 func (m *Muxer) writePMT() error {
-	section := make([]byte, 17)
+	// The PMT grows by one stream entry (with its descriptors) when audio is on.
+	// Section length is everything after the length field: 5 bytes of header
+	// before the streams, then each entry, then the 4-byte CRC.
+	extra := 0
+	if m.withAudio {
+		extra = 5 + opusDescriptorsLen
+	}
+
+	section := make([]byte, 17+extra)
 	section[0] = 0x02 // table_id
 	section[1] = 0xB0
-	section[2] = 0x12 // section_length = 18
+	section[2] = byte(0x12 + extra) // section_length
 	section[3] = 0x00
 	section[4] = 0x01 // program_number
 	section[5] = 0xC1
@@ -176,12 +203,34 @@ func (m *Muxer) writePMT() error {
 	section[15] = 0xF0
 	section[16] = 0x00 // ES_info_length
 
+	at := 17
+	if m.withAudio {
+		section[at] = streamTypePrivate
+		section[at+1] = 0xE0 | byte(pidAudio>>8)
+		section[at+2] = byte(pidAudio & 0xFF)
+		section[at+3] = 0xF0 | byte(opusDescriptorsLen>>8)
+		section[at+4] = byte(opusDescriptorsLen)
+		copy(section[at+5:], opusDescriptors[:])
+	}
+
 	if err := m.writeSection(pidPMT, section, m.pmtCounter); err != nil {
 		return err
 	}
 	m.pmtCounter = (m.pmtCounter + 1) & 0x0F
 	return nil
 }
+
+// opusDescriptors are the ES descriptors that tell a demuxer the private stream is
+// Opus. A registration descriptor naming the format, plus the extension
+// descriptor ffmpeg writes alongside it.
+var opusDescriptors = [10]byte{
+	0x05, 0x04, 'O', 'p', 'u', 's', // registration_descriptor
+	0x7F, 0x02, 0x80, 0x01, // extension_descriptor, as ffmpeg emits it
+}
+
+// opusDescriptorsLen is a constant so the PMT section length can be computed at
+// compile time; len() of a slice is not.
+const opusDescriptorsLen = len(opusDescriptors)
 
 // writeSection emits a short table: pointer field, section, CRC, stuffing.
 func (m *Muxer) writeSection(pid uint16, section []byte, counter byte) error {
@@ -210,8 +259,37 @@ func (m *Muxer) writeSection(pid uint16, section []byte, counter byte) error {
 // ----------------------------------------------------------------- video ---
 
 func (m *Muxer) writeVideo(accessUnit []byte, pts, pcr int64, keyframe bool) error {
-	pes := buildPESHeader(pts)
-	payloadLength := len(pes) + len(accessUnit)
+	return m.writeElementary(pidVideo, &m.videoCounter, buildPESHeader(pts), accessUnit, true, pcr, keyframe)
+}
+
+// WriteAudio emits one Opus frame on the private audio stream.
+//
+// The timestamp is measured from the video clock's origin, the same rule the HLS
+// segmenter follows: normalising audio on its own would shift the sound against
+// the picture whenever the camera started sending audio later than video.
+func (m *Muxer) WriteAudio(p miss.Packet) error {
+	if !m.withAudio || len(p.Payload) == 0 {
+		return nil
+	}
+
+	origin, ok := m.clock.Origin()
+	if !ok {
+		// No picture yet, so there is no timeline to align to and no PMT either.
+		return nil
+	}
+
+	elapsed := p.TimestampMS - origin
+	if elapsed < 0 {
+		elapsed = 0
+	}
+
+	pts := m.ptsOffset + elapsed*clockHz/1000
+	return m.writeElementary(pidAudio, &m.audioCounter, buildAudioPESHeader(pts, len(p.Payload)), p.Payload, false, 0, false)
+}
+
+// writeElementary splits one PES packet across TS packets.
+func (m *Muxer) writeElementary(pid uint16, counter *byte, pes, unit []byte, withPCR bool, pcr int64, keyframe bool) error {
+	payloadLength := len(pes) + len(unit)
 
 	written := 0
 	first := true
@@ -219,20 +297,20 @@ func (m *Muxer) writeVideo(accessUnit []byte, pts, pcr int64, keyframe bool) err
 		packet := make([]byte, packetSize)
 		packet[0] = syncByte
 		if first {
-			packet[1] = 0x40 | byte(pidVideo>>8)
+			packet[1] = 0x40 | byte(pid>>8)
 		} else {
-			packet[1] = byte(pidVideo >> 8)
+			packet[1] = byte(pid >> 8)
 		}
-		packet[2] = byte(pidVideo & 0xFF)
+		packet[2] = byte(pid & 0xFF)
 
 		remaining := payloadLength - written
 
 		// PCR rides on the first packet of every access unit, and a short final
 		// packet is padded with adaptation-field stuffing, because TS packets are
 		// always 188 bytes.
-		useAdaptation := first || remaining < maxPayload
+		useAdaptation := (first && withPCR) || remaining < maxPayload
 		fieldLength := 0
-		if first {
+		if first && withPCR {
 			fieldLength = pcrFieldLen
 		}
 
@@ -247,19 +325,19 @@ func (m *Muxer) writeVideo(accessUnit []byte, pts, pcr int64, keyframe bool) err
 
 		var offset int
 		if useAdaptation {
-			packet[3] = 0x30 | m.videoCounter
-			offset = writeAdaptationField(packet, fieldLength, first, keyframe, pcr)
+			packet[3] = 0x30 | *counter
+			offset = writeAdaptationField(packet, fieldLength, first && withPCR, keyframe, pcr)
 		} else {
-			packet[3] = 0x10 | m.videoCounter
+			packet[3] = 0x10 | *counter
 			offset = 4
 		}
-		m.videoCounter = (m.videoCounter + 1) & 0x0F
+		*counter = (*counter + 1) & 0x0F
 
 		chunk := capacity
 		if remaining < chunk {
 			chunk = remaining
 		}
-		copyPayload(packet, offset, pes, accessUnit, written, chunk)
+		copyPayload(packet, offset, pes, unit, written, chunk)
 		written += chunk
 		first = false
 
@@ -337,6 +415,25 @@ func buildPESHeader(pts int64) []byte {
 	header[5] = 0x00
 	header[6] = 0x80 // marker bits
 	header[7] = 0x80 // PTS present
+	header[8] = 0x05 // header data length
+	writePTS(header, 9, pts, 0x02)
+	return header
+}
+
+// buildAudioPESHeader is the private-stream PES header for Opus: stream_id 0xBD,
+// a real packet length (audio frames are small enough to state it), and a PTS
+// with no DTS.
+func buildAudioPESHeader(pts int64, payloadLen int) []byte {
+	header := make([]byte, 14)
+	header[0] = 0x00
+	header[1] = 0x00
+	header[2] = 0x01
+	header[3] = streamIDPrivate
+	length := 3 + 5 + payloadLen // the three flag bytes, the PTS, the payload
+	header[4] = byte(length >> 8)
+	header[5] = byte(length)
+	header[6] = 0x80 // marker bits
+	header[7] = 0x80 // PTS present, no DTS
 	header[8] = 0x05 // header data length
 	writePTS(header, 9, pts, 0x02)
 	return header

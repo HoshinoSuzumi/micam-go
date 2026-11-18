@@ -289,6 +289,12 @@ func (s *Server) Publish(p miss.Packet) {
 		for v := range s.audioViewers {
 			v.offer(p)
 		}
+		// Video viewers get it too: their sink decides. The transport stream has
+		// a second elementary stream for it; a viewer whose sink cannot carry
+		// sound drops the frame.
+		for v := range s.viewers {
+			v.offer(p)
+		}
 		// The HLS track needs these too: an init segment that declares an audio
 		// track and fragments that never carry a sample of it is a stream players
 		// wait on forever, which looks exactly like a broken video.
@@ -352,7 +358,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 
 	factory := s.cfg.Sink
 	if factory == nil {
-		factory = sink.TS(s.cfg.PTSLeadMS)
+		factory = sink.TS(s.cfg.PTSLeadMS, s.cfg.Audio)
 	}
 
 	v := &viewer{
@@ -546,6 +552,16 @@ func (v *viewer) pump(w io.Writer, flusher http.Flusher) {
 			if !ok {
 				return
 			}
+			if p.IsAudio() {
+				if audio, ok := out.(sink.AudioWriter); ok && audio != nil {
+					if err := audio.WriteAudio(p); err != nil {
+						return
+					}
+					flusher.Flush()
+				}
+				continue
+			}
+
 			if out == nil {
 				out = v.newSink(w, p.Codec)
 			}
