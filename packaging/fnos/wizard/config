@@ -3,6 +3,23 @@
     "stepTitle": "小米账号",
     "items": [
       {
+        "type": "switch",
+        "field": "wizard_audio",
+        "label": "摄像头声音（WAV 旁路）",
+        "initValue": "false",
+        "helpText": "打开后摄像头开始送音频，另开一个 /cam.wav 地址。声音不在视频流里"
+      },
+      {
+        "type": "text",
+        "field": "wizard_audio_rate",
+        "label": "音频采样率",
+        "initValue": "8000",
+        "helpText": "写进 WAV 头；G.711 一般是 8000，若声音变调改成 16000",
+        "rules": [
+          { "pattern": "^[0-9]+$", "message": "请填数字" }
+        ]
+      },
+      {
         "type": "tips",
         "helpText": "userId 和 passToken 只能从浏览器 Cookie 里取：登录 account.xiaomi.com → 按 F12 → Application → Cookies。应用的首页有逐步截图说明。两者都填错会导致登录失败，userId 是纯数字，不是手机号。"
       },
@@ -43,6 +60,23 @@
         "initValue": "",
         "rules": [
           { "required": true, "message": "请粘贴 passToken" }
+        ]
+      },
+      {
+        "type": "switch",
+        "field": "wizard_audio",
+        "label": "摄像头声音（WAV 旁路）",
+        "initValue": "false",
+        "helpText": "打开后摄像头开始送音频，另开一个 /cam.wav 地址。声音不在视频流里"
+      },
+      {
+        "type": "text",
+        "field": "wizard_audio_rate",
+        "label": "音频采样率",
+        "initValue": "8000",
+        "helpText": "写进 WAV 头；G.711 一般是 8000，若声音变调改成 16000",
+        "rules": [
+          { "pattern": "^[0-9]+$", "message": "请填数字" }
         ]
       },
       {
@@ -107,6 +141,23 @@
         "label": "HLS 分片窗口",
         "initValue": "6",
         "helpText": "保留几个分片，6 约等于十几秒缓冲；调小延迟低但弱网更易卡",
+        "rules": [
+          { "pattern": "^[0-9]+$", "message": "请填数字" }
+        ]
+      },
+      {
+        "type": "switch",
+        "field": "wizard_audio",
+        "label": "摄像头声音（WAV 旁路）",
+        "initValue": "false",
+        "helpText": "打开后摄像头开始送音频，另开一个 /cam.wav 地址。声音不在视频流里"
+      },
+      {
+        "type": "text",
+        "field": "wizard_audio_rate",
+        "label": "音频采样率",
+        "initValue": "8000",
+        "helpText": "写进 WAV 头；G.711 一般是 8000，若声音变调改成 16000",
         "rules": [
           { "pattern": "^[0-9]+$", "message": "请填数字" }
         ]

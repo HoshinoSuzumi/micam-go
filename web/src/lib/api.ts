@@ -33,6 +33,8 @@ export interface AppStatus {
   urls?: StreamURL[];
   /** hls are the same addresses pointing at the playlist Safari and iOS need. */
   hls?: StreamURL[];
+  /** audio is the WAV endpoint, when the camera's sound is enabled. */
+  audio?: StreamURL[];
   frames: number;
   fps: number;
   viewers: number;
@@ -55,6 +57,10 @@ export interface Config {
   hls: boolean;
   /** hls_window is how many segments the playlist keeps. */
   hls_window: number;
+  /** audio asks the camera for sound on its own WAV endpoint. */
+  audio: boolean;
+  /** audio_rate goes into the WAV header. */
+  audio_rate: number;
   has_token: boolean;
   pass_token?: string;
 }

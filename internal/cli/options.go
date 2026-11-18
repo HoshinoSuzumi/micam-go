@@ -47,6 +47,10 @@ type Options struct {
 	HLS bool
 	// HLSWindow is how many segments the playlist keeps.
 	HLSWindow int
+	// Audio asks the camera for sound and serves it as a WAV stream.
+	Audio bool
+	// AudioRate is the sample rate of that sound.
+	AudioRate int
 
 	ConnectTimeout time.Duration
 	Relogin        bool
@@ -107,6 +111,10 @@ func Parse(args []string) (*Options, error) {
 		"also serve /cam.m3u8 for Safari and iOS")
 	fs.IntVar(&opts.HLSWindow, "hls-window", envIntOr("MICAM_HLS_WINDOW", 6),
 		"segments kept in the playlist: more is steadier, fewer is lower latency")
+	fs.BoolVar(&opts.Audio, "audio", envBoolOr("MICAM_AUDIO", false),
+		"ask the camera for sound and serve it as /cam.wav")
+	fs.IntVar(&opts.AudioRate, "audio-rate", envIntOr("MICAM_AUDIO_RATE", 8000),
+		"sample rate of the camera's audio, for the WAV header")
 	fs.IntVar(&timeoutSeconds, "connect-timeout", 90,
 		"seconds to keep retrying the relay handshake")
 	fs.BoolVar(&opts.Relogin, "relogin", false, "discard the cached session and log in again")
@@ -153,6 +161,9 @@ func Parse(args []string) (*Options, error) {
 	}
 	if opts.DumpSeconds < 0 {
 		return nil, fmt.Errorf("dump-seconds must be >= 0, got %d", opts.DumpSeconds)
+	}
+	if opts.AudioRate < 1000 || opts.AudioRate > 48000 {
+		return nil, fmt.Errorf("audio-rate must be 1000..48000, got %d", opts.AudioRate)
 	}
 	if opts.Port < 1 || opts.Port > 65535 {
 		return nil, fmt.Errorf("port must be 1..65535, got %d", opts.Port)

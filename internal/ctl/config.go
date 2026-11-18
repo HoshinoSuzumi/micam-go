@@ -28,6 +28,11 @@ type Config struct {
 	HLS       bool `json:"hls"`
 	HLSWindow int  `json:"hls_window"`
 
+	// Audio asks the camera for sound and serves it as a WAV stream on its own
+	// endpoint. AudioRate fills in the WAV header.
+	Audio     bool `json:"audio"`
+	AudioRate int  `json:"audio_rate"`
+
 	// HasToken reports whether a passToken is stored. The token itself is never
 	// sent to a browser.
 	HasToken bool `json:"has_token"`
@@ -47,6 +52,8 @@ func Defaults() Config {
 		Reconnect: 5,
 		HLS:       true,
 		HLSWindow: 6,
+		Audio:     false,
+		AudioRate: 8000,
 	}
 }
 
@@ -108,6 +115,12 @@ func (c *Config) set(key, value string) {
 		}
 	case "MICAM_HLS_WINDOW":
 		c.HLSWindow = atoiOr(value, c.HLSWindow)
+	case "MICAM_AUDIO":
+		if parsed, err := strconv.ParseBool(value); err == nil {
+			c.Audio = parsed
+		}
+	case "MICAM_AUDIO_RATE":
+		c.AudioRate = atoiOr(value, c.AudioRate)
 	}
 }
 
@@ -155,6 +168,8 @@ func (c Config) Encode() []byte {
 	fmt.Fprintf(&b, "MICAM_RECONNECT=%s\n", quote(strconv.Itoa(c.Reconnect)))
 	fmt.Fprintf(&b, "MICAM_HLS=%s\n", quote(strconv.FormatBool(c.HLS)))
 	fmt.Fprintf(&b, "MICAM_HLS_WINDOW=%s\n", quote(strconv.Itoa(c.HLSWindow)))
+	fmt.Fprintf(&b, "MICAM_AUDIO=%s\n", quote(strconv.FormatBool(c.Audio)))
+	fmt.Fprintf(&b, "MICAM_AUDIO_RATE=%s\n", quote(strconv.Itoa(c.AudioRate)))
 	return []byte(b.String())
 }
 
@@ -191,6 +206,9 @@ func (c *Config) Validate() error {
 	}
 	if c.HLSWindow < 0 || c.HLSWindow > 60 {
 		return fmt.Errorf("hls_window must be 0..60, got %d", c.HLSWindow)
+	}
+	if c.AudioRate != 0 && (c.AudioRate < 1000 || c.AudioRate > 48000) {
+		return fmt.Errorf("audio_rate must be 1000..48000, got %d", c.AudioRate)
 	}
 	if c.DID != "" && !digits(c.DID) {
 		return errors.New("did must be digits only")

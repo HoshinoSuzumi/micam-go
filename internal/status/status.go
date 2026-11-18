@@ -71,6 +71,8 @@ type Snapshot struct {
 	// HLS are the same addresses, pointing at the playlist instead. Safari and
 	// iOS can only play this one, so it is listed separately.
 	HLS []StreamURL `json:"hls,omitempty"`
+	// Audio is the WAV endpoint, when the camera's sound is enabled.
+	Audio []StreamURL `json:"audio,omitempty"`
 
 	Frames  int64   `json:"frames"`
 	FPS     float64 `json:"fps"`
@@ -244,6 +246,16 @@ func (r *Reporter) Bind(addr string, urls []StreamURL) {
 	defer r.mu.Unlock()
 	r.snap.Bind = addr
 	r.snap.URLs = urls
+}
+
+// BindAudio records the WAV endpoint addresses, when audio is served.
+func (r *Reporter) BindAudio(urls []StreamURL) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.snap.Audio = urls
 }
 
 // BindHLS records the playlist addresses, when HLS is served.

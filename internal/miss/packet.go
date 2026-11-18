@@ -37,6 +37,11 @@ func (p Packet) IsVideo() bool {
 	return p.Codec == CodecH264 || p.Codec == CodecH265
 }
 
+// IsAudio reports whether the frame carries sound.
+func (p Packet) IsAudio() bool {
+	return p.Codec == CodecPCMA || p.Codec == CodecOpus
+}
+
 // CodecName renders the codec for logs.
 func (p Packet) CodecName() string {
 	switch p.Codec {

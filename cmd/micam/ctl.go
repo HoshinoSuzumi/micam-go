@@ -40,6 +40,8 @@ func runWriteConfig() int {
 		Reconnect: intOr(os.Getenv("MICAM_RECONNECT"), 5),
 		HLS:       boolOr(os.Getenv("wizard_hls"), true),
 		HLSWindow: intOr(os.Getenv("wizard_hls_window"), 6),
+		Audio:     boolOr(os.Getenv("wizard_audio"), false),
+		AudioRate: intOr(os.Getenv("wizard_audio_rate"), 8000),
 		PassToken: os.Getenv("wizard_pass_token"),
 	}
 	if err := cfg.Validate(); err != nil {

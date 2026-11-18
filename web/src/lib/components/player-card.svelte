@@ -8,7 +8,13 @@
     url,
     endpoints = [],
     hlsEnabled = false,
-  }: { url: string; endpoints?: StreamURL[]; hlsEnabled?: boolean } = $props();
+    audioEnabled = false,
+  }: {
+    url: string;
+    endpoints?: StreamURL[];
+    hlsEnabled?: boolean;
+    audioEnabled?: boolean;
+  } = $props();
 
   // Which row was copied last, so the feedback lands where the click did.
   let copied = $state<string | null>(null);
@@ -65,6 +71,10 @@
   // path. Deriving it from the selected address keeps one selector in charge of
   // both, so the two can never point at different interfaces.
   const hls = $derived(active.replace(/\.ts$/, ".m3u8"));
+
+  // Same for the sound: a separate endpoint, because neither MPEG-TS nor the
+  // HLS container can carry the camera's G.711.
+  const audio = $derived(active.replace(/\.ts$/, ".wav"));
 
   async function copy(id: string, text: string) {
     const ok = await copyText(text);
@@ -153,6 +163,32 @@
             onclick={() => copy("hls", hls)}
           >
             {copied === "hls" ? "已复制" : failed === "hls" ? "复制失败" : "复制"}
+          </Button>
+        </div>
+      </div>
+    {/if}
+
+    {#if audioEnabled}
+      <div class="space-y-2 border-t pt-3">
+        <div class="flex flex-wrap items-baseline gap-x-2">
+          <span class="text-xs font-medium">声音（WAV）</span>
+          <span class="text-[11px] text-muted-foreground">
+            独立地址，用播放器单独打开；视频流里没有音频
+          </span>
+        </div>
+
+        <div class="flex flex-wrap gap-2">
+          <code
+            class="min-w-0 flex-1 basis-64 truncate rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs"
+            title={audio}>{audio}</code
+          >
+          <Button
+            variant="outline"
+            size="sm"
+            class="h-9 shrink-0"
+            onclick={() => copy("audio", audio)}
+          >
+            {copied === "audio" ? "已复制" : failed === "audio" ? "复制失败" : "复制"}
           </Button>
         </div>
       </div>

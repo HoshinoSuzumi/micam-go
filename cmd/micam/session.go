@@ -225,7 +225,7 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 
 	rep.Stage(status.StageStartingVideo)
 	log.Info("requesting video", "quality", opts.Quality, "pts_lead_ms", opts.PTSLeadMS)
-	if err := media.StartVideo(opts.Quality, false); err != nil {
+	if err := media.StartVideo(opts.Quality, opts.Audio); err != nil {
 		log.Error("cannot start the video stream", "err", err)
 		return outcome{code: exitSession, retryable: true, err: err}
 	}
@@ -256,6 +256,8 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 		PTSLeadMS: opts.PTSLeadMS,
 		HLS:       opts.HLS,
 		HLSWindow: opts.HLSWindow,
+		Audio:     opts.Audio,
+		AudioRate: opts.AudioRate,
 	}, log)
 	if err := server.Start(); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "in use") {
@@ -285,6 +287,17 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 			hls = append(hls, status.StreamURL{URL: server.HLSURLOf(server.URL())})
 		}
 		rep.BindHLS(hls)
+	}
+
+	if opts.Audio {
+		audio := make([]status.StreamURL, 0, len(reachable)+1)
+		for _, u := range reachable {
+			audio = append(audio, status.StreamURL{URL: server.AudioURLOf(u.URL), Iface: u.Iface})
+		}
+		if len(audio) == 0 {
+			audio = append(audio, status.StreamURL{URL: server.AudioURLOf(server.URL())})
+		}
+		rep.BindAudio(audio)
 	}
 
 	if showBanner {
@@ -320,6 +333,15 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 				fmt.Printf("    %s\n", server.HLSURLOf(server.URL()))
 			}
 		}
+
+		if opts.Audio {
+			fmt.Printf("  Audio (WAV):\n")
+			if len(reachable) > 0 {
+				fmt.Printf("    %s\n", server.AudioURLOf(reachable[0].URL))
+			} else {
+				fmt.Printf("    %s\n", server.AudioURLOf(server.URL()))
+			}
+		}
 		fmt.Println()
 	} else {
 		log.Info("streaming again", "listen", server.Addr(), "url", server.URL())
@@ -333,6 +355,7 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 	}
 
 	frames := 0
+	audioFrames := 0
 	var streamErr error
 	for ctx.Err() == nil {
 		// The camera keeps talking on channel 0 while it streams. Nothing here
@@ -350,9 +373,21 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 		if !ok {
 			break
 		}
+
+		// Audio goes to its own endpoint and its own listeners; the video side is
+		// untouched by it.
+		if packet.IsAudio() {
+			server.Publish(packet)
+			if audioFrames == 0 {
+				log.Info("audio arrived", "codec", packet.CodecName(), "bytes", len(packet.Payload))
+			}
+			audioFrames++
+			continue
+		}
 		if !packet.IsVideo() {
 			continue
 		}
+
 		server.Publish(packet)
 		frames++
 		if frames == 1 {

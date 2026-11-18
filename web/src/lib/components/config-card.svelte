@@ -31,6 +31,8 @@
     // The select stores a string; the API wants a boolean.
     hls: "on" | "off";
     hls_window: number;
+    audio: "on" | "off";
+    audio_rate: number;
     pass_token: string;
   }
 
@@ -46,6 +48,8 @@
       reconnect: c.reconnect ?? 5,
       hls: (c.hls ?? true) ? "on" : "off",
       hls_window: c.hls_window ?? 6,
+      audio: (c.audio ?? false) ? "on" : "off",
+      audio_rate: c.audio_rate ?? 8000,
       pass_token: "",
     };
   }
@@ -77,6 +81,7 @@
       const result = await saveConfig({
         ...form,
         hls: form.hls === "on",
+        audio: form.audio === "on",
         has_token: config.has_token,
       });
       onSaved(result);
@@ -230,6 +235,32 @@
         />
         <p class="text-[11px] text-muted-foreground">
           保留几个分片，6 约等于十几秒缓冲。调小延迟低，但弱网更容易卡。
+        </p>
+      </div>
+
+      <div class="space-y-1.5">
+        <Label for="audio">摄像头声音</Label>
+        <Select id="audio" bind:value={form.audio} onchange={edit}>
+          <option value="on">开启（额外的 /cam.wav 地址）</option>
+          <option value="off">关闭</option>
+        </Select>
+        <p class="text-[11px] text-muted-foreground">
+          声音不在视频流里：MPEG-TS 和 HLS 都装不下这个摄像头的 G.711。
+        </p>
+      </div>
+
+      <div class="space-y-1.5">
+        <Label for="audio-rate">音频采样率</Label>
+        <Input
+          id="audio-rate"
+          type="number"
+          min="1000"
+          max="48000"
+          bind:value={form.audio_rate}
+          oninput={edit}
+        />
+        <p class="text-[11px] text-muted-foreground">
+          写进 WAV 头。G.711 一般是 8000；声音变调就改成 16000 试试。
         </p>
       </div>
     </div>

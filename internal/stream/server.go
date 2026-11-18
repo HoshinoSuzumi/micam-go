@@ -40,6 +40,16 @@ type Config struct {
 	HLS bool
 	// HLSWindow is how many segments the playlist keeps. Zero means the default.
 	HLSWindow int
+	// Audio serves the camera's sound as a WAV stream on its own endpoint.
+	//
+	// It is separate because MPEG-TS has no way to carry G.711 and the HLS
+	// container cannot either: putting it in the video stream would mean writing
+	// a track no player can decode.
+	Audio bool
+	// AudioPath defaults to /cam.wav.
+	AudioPath string
+	// AudioRate is the sample rate of the camera's G.711 audio.
+	AudioRate int
 }
 
 // Server fans one stream out to any number of HTTP viewers.
@@ -55,9 +65,10 @@ type Server struct {
 	// seg is the single HLS segmenter, shared by every HLS viewer.
 	seg *hls.Segmenter
 
-	mu      sync.RWMutex
-	viewers map[*viewer]struct{}
-	closed  bool
+	mu           sync.RWMutex
+	viewers      map[*viewer]struct{}
+	audioViewers map[*audioViewer]struct{}
+	closed       bool
 }
 
 // New builds a server. It does not listen until Start.
@@ -68,7 +79,19 @@ func New(cfg Config, log *slog.Logger) *Server {
 	if cfg.Path == "" {
 		cfg.Path = "/cam.ts"
 	}
-	return &Server{cfg: cfg, log: log, viewers: make(map[*viewer]struct{})}
+	if cfg.AudioPath == "" {
+		cfg.AudioPath = "/cam.wav"
+	}
+	if cfg.AudioRate <= 0 {
+		// G.711 is an 8 kHz codec; anything else would be an unusual camera.
+		cfg.AudioRate = 8000
+	}
+	return &Server{
+		cfg:          cfg,
+		log:          log,
+		viewers:      make(map[*viewer]struct{}),
+		audioViewers: make(map[*audioViewer]struct{}),
+	}
 }
 
 // Start binds the listener and begins serving.
@@ -88,6 +111,10 @@ func (s *Server) Start() error {
 		// A trailing slash is required: patterns without one match exactly in
 		// Go 1.22's mux, so "/cam/seg" would never see "/cam/seg0.m4s".
 		mux.HandleFunc(s.HLSBase()+"/", s.handleHLSFile)
+	}
+
+	if s.cfg.Audio {
+		mux.HandleFunc(s.cfg.AudioPath, s.handleAudio)
 	}
 
 	s.http = &http.Server{
@@ -244,12 +271,24 @@ func (s *Server) Publish(p miss.Packet) {
 	if s.closed {
 		return
 	}
-	for v := range s.viewers {
-		v.offer(p)
+
+	// Video and audio have separate audiences and separate sinks. An audio frame
+	// must never reach a video viewer: its sink is built from the first frame's
+	// codec, and 1027 would produce a muxer for a stream type that does not exist.
+	if p.IsVideo() {
+		for v := range s.viewers {
+			v.offer(p)
+		}
+		if s.seg != nil {
+			_ = s.seg.Write(p)
+		}
+		return
 	}
 
-	if s.seg != nil {
-		_ = s.seg.Write(p)
+	if p.IsAudio() {
+		for v := range s.audioViewers {
+			v.offer(p)
+		}
 	}
 }
 
@@ -264,6 +303,10 @@ func (s *Server) Close() error {
 	for v := range s.viewers {
 		delete(s.viewers, v)
 		close(v.frames)
+	}
+	for v := range s.audioViewers {
+		delete(s.audioViewers, v)
+		close(v.packets)
 	}
 	s.mu.Unlock()
 
@@ -344,6 +387,11 @@ func (s *Server) hlsMediaBase() string {
 // already knows is reachable.
 func (s *Server) HLSURLOf(streamURL string) string {
 	return strings.TrimSuffix(streamURL, s.cfg.Path) + s.HLSPlaylistPath()
+}
+
+// AudioURLOf swaps the stream path for the audio path.
+func (s *Server) AudioURLOf(streamURL string) string {
+	return strings.TrimSuffix(streamURL, s.cfg.Path) + s.cfg.AudioPath
 }
 
 func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
