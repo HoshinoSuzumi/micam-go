@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"testing"
@@ -137,6 +138,42 @@ func TestAudioHeadHasNoBody(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if len(body) != 0 {
 		t.Fatalf("HEAD returned %d bytes", len(body))
+	}
+}
+
+// TestAudioReachesTheHLSTrack covers the wiring between Publish and the
+// segmenter.
+//
+// It was missing once: audio went to the WAV listeners and nowhere else, so the
+// init segment declared an audio track that no fragment ever carried. Players
+// waited for it and showed black - on every browser, while the transport stream
+// stayed perfectly healthy.
+func TestAudioReachesTheHLSTrack(t *testing.T) {
+	srv := New(Config{Addr: "127.0.0.1:0", Path: "/cam.ts", HLS: true, Audio: true}, testLogger())
+	if err := srv.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { srv.Close() })
+
+	// One segment: a keyframe, some frames, then the next keyframe closes it.
+	srv.Publish(hlsFrame(t, 19, 0, true))
+	for i := 1; i <= 10; i++ {
+		srv.Publish(hlsFrame(t, 1, int64(i)*50, false))
+		// Two audio packets per video frame, as the camera sends them.
+		srv.Publish(miss.Packet{Codec: miss.CodecOpus, TimestampMS: int64(i) * 50, Payload: []byte{0xF8, 1, 2, 3}})
+		srv.Publish(miss.Packet{Codec: miss.CodecOpus, TimestampMS: int64(i)*50 + 25, Payload: []byte{0xF8, 4, 5, 6}})
+	}
+	srv.Publish(hlsFrame(t, 19, 550, true))
+
+	_, playlist := get(t, srv, "/cam.m3u8")
+	uris := playlistURIs(string(playlist))
+	if len(uris) < 2 {
+		t.Fatalf("playlist names %d URIs:\n%s", len(uris), playlist)
+	}
+
+	_, segment := get(t, srv, "/"+uris[1])
+	if got := bytes.Count(segment[:min(len(segment), 4096)], []byte("traf")); got != 2 {
+		t.Fatalf("segment has %d trafs, want 2 (video and audio)", got)
 	}
 }
 

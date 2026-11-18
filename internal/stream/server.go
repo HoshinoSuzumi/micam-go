@@ -289,6 +289,12 @@ func (s *Server) Publish(p miss.Packet) {
 		for v := range s.audioViewers {
 			v.offer(p)
 		}
+		// The HLS track needs these too: an init segment that declares an audio
+		// track and fragments that never carry a sample of it is a stream players
+		// wait on forever, which looks exactly like a broken video.
+		if s.seg != nil {
+			_ = s.seg.Write(p)
+		}
 	}
 }
 
