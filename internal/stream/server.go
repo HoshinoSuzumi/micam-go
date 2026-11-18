@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"micam/internal/hls"
@@ -68,6 +69,7 @@ type Server struct {
 	mu           sync.RWMutex
 	viewers      map[*viewer]struct{}
 	audioViewers map[*audioViewer]struct{}
+	hls          map[string]*hlsSession
 	closed       bool
 }
 
@@ -91,6 +93,7 @@ func New(cfg Config, log *slog.Logger) *Server {
 		log:          log,
 		viewers:      make(map[*viewer]struct{}),
 		audioViewers: make(map[*audioViewer]struct{}),
+		hls:          make(map[string]*hlsSession),
 	}
 }
 
@@ -244,13 +247,6 @@ func (s *Server) URL() string {
 	return "http://" + net.JoinHostPort(host, port) + s.cfg.Path
 }
 
-// Viewers reports how many players are connected.
-func (s *Server) Viewers() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return len(s.viewers)
-}
-
 // Resyncs reports how many times a viewer fell behind and had to be restarted at
 // a keyframe. A number that keeps climbing means the player cannot keep up.
 func (s *Server) Resyncs() int {
@@ -320,6 +316,7 @@ func (s *Server) Close() error {
 		delete(s.audioViewers, v)
 		close(v.packets)
 	}
+	clear(s.hls)
 	s.mu.Unlock()
 
 	if s.http != nil {
@@ -365,6 +362,8 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		frames:  make(chan miss.Packet, queueDepth),
 		newSink: factory,
 		log:     s.log,
+		remote:  clientIP(r),
+		since:   time.Now(),
 	}
 	s.add(v)
 	s.log.Info("viewer connected", "from", r.RemoteAddr, "total", s.Viewers())
@@ -373,7 +372,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		s.log.Info("viewer disconnected", "total", s.Viewers())
 	}()
 
-	v.pump(w, flusher)
+	v.pump(countingWriter{w: w, n: &v.bytes}, flusher)
 }
 
 // HLSBase is the URL prefix shared by the HLS endpoints: the TS path without its
@@ -414,6 +413,8 @@ func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body := s.seg.Playlist(s.hlsMediaBase())
+	s.noteHLS(r, len(body))
+
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
@@ -437,6 +438,9 @@ func (s *Server) handleHLSFile(w http.ResponseWriter, r *http.Request) {
 	// media segments rather than living at a fixed /init.mp4 that could go stale
 	// when the parameter sets change.
 	body, ok := s.seg.Media(name)
+	if ok {
+		s.noteHLS(r, len(body))
+	}
 	if !ok {
 		// Normal: the playlist was fetched before the window slid, or the player
 		// is asking for a segment that has already been recycled.
@@ -480,6 +484,9 @@ type viewer struct {
 	frames  chan miss.Packet
 	started bool
 	resyncs int
+	remote  string
+	since   time.Time
+	bytes   atomic.Int64
 	log     *slog.Logger
 	// newSink builds this viewer's wire format once the codec is known.
 	newSink sink.Factory

@@ -38,6 +38,22 @@ type StreamURL struct {
 	Iface string `json:"iface,omitempty"`
 }
 
+// Connection is one player, as the management UI lists it.
+//
+// The kinds differ in how they are known: a transport-stream or WAV listener holds
+// a connection open, while an HLS player only appears as a series of requests, so
+// its entry is inferred from the last one seen.
+type Connection struct {
+	Kind   string    `json:"kind"` // ts, hls or wav
+	Remote string    `json:"remote"`
+	Since  time.Time `json:"since"`
+	Bytes  int64     `json:"bytes"`
+	// Requests and Last matter for HLS, where "still here" means "asked for
+	// something recently".
+	Requests int64     `json:"requests,omitempty"`
+	Last     time.Time `json:"last,omitempty"`
+}
+
 // Stage says what "connecting" is actually doing. The state alone covers five
 // different waits of very different lengths, so "连接中" could mean anything from
 // "asking the cloud" to "waiting for a frame that never comes".
@@ -78,6 +94,10 @@ type Snapshot struct {
 	FPS     float64 `json:"fps"`
 	Viewers int     `json:"viewers"`
 	Resyncs int     `json:"resyncs"`
+
+	// Connections lists who is watching and through which output. The count above
+	// is the same number, kept for clients that only want a figure.
+	Connections []Connection `json:"connections,omitempty"`
 
 	// Since is when the current session started, Updated when it was written.
 	Since   time.Time `json:"since"`
@@ -313,6 +333,17 @@ func (r *Reporter) Sample(viewers, resyncs int) {
 	defer r.mu.Unlock()
 	r.snap.Viewers = viewers
 	r.snap.Resyncs = resyncs
+}
+
+// Connections records who is watching, through which output. It allocates, so it
+// is called less often than Sample.
+func (r *Reporter) Connections(list []Connection) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.snap.Connections = list
 }
 
 // Close writes a final snapshot and stops the writer.

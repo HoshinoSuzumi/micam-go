@@ -395,6 +395,9 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 		}
 		rep.Frame(packet.CodecName())
 		rep.Sample(server.Viewers(), server.Resyncs())
+		if frames%20 == 0 {
+			rep.Connections(server.ViewersInfo())
+		}
 		if frames%600 == 0 {
 			log.Info("relaying", "frames", frames, "viewers", server.Viewers(),
 				"resyncs", server.Resyncs(), "codec", packet.CodecName())

@@ -2,6 +2,7 @@ package stream
 
 import (
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"micam/internal/audio"
@@ -22,6 +23,10 @@ type audioViewer struct {
 	packets chan miss.Packet
 	pcm     []byte // decode buffer, reused between frames
 	warned  bool
+
+	remote string
+	since  time.Time
+	bytes  atomic.Int64
 }
 
 // offer queues one audio frame.
@@ -63,20 +68,26 @@ func (s *Server) handleAudio(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 
-	// The header declares unknown sizes; a player must start immediately rather
-	// than wait for a length that never arrives.
-	if r.Method == http.MethodGet {
-		if _, err := w.Write(audio.WAVHeader(s.cfg.AudioRate, 1)); err != nil {
-			return
-		}
-	}
-	flusher.Flush()
-
 	if r.Method == http.MethodHead {
+		flusher.Flush()
 		return
 	}
 
-	v := &audioViewer{packets: make(chan miss.Packet, audioQueue)}
+	v := &audioViewer{
+		packets: make(chan miss.Packet, audioQueue),
+		remote:  clientIP(r),
+		since:   time.Now(),
+	}
+
+	// The header declares unknown sizes; a player must start immediately rather
+	// than wait for a length that never arrives.
+	header := audio.WAVHeader(s.cfg.AudioRate, 1)
+	if _, err := w.Write(header); err != nil {
+		return
+	}
+	v.bytes.Add(int64(len(header)))
+	flusher.Flush()
+
 	s.addAudio(v)
 	s.log.Info("audio listener connected", "from", r.RemoteAddr, "total", s.AudioListeners())
 	defer func() {
@@ -105,7 +116,11 @@ func (s *Server) handleAudio(w http.ResponseWriter, r *http.Request) {
 			}
 
 			v.pcm = audio.DecodeALaw(v.pcm, p.Payload)
-			if _, err := w.Write(v.pcm); err != nil {
+			n, err := w.Write(v.pcm)
+			if n > 0 {
+				v.bytes.Add(int64(n))
+			}
+			if err != nil {
 				return // normal: the player disconnected
 			}
 			flusher.Flush()

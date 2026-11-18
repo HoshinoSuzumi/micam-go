@@ -3,6 +3,7 @@
   import { stateLabel, stateTone } from "$lib/format";
   import { Badge, Button } from "$lib/components/ui";
   import ConfigCard from "$lib/components/config-card.svelte";
+  import ConnectionsCard from "$lib/components/connections-card.svelte";
   import LogCard from "$lib/components/log-card.svelte";
   import PlayerCard from "$lib/components/player-card.svelte";
   import StatusCard from "$lib/components/status-card.svelte";
@@ -107,7 +108,9 @@
       hlsEnabled={data.config.hls}
       audioEnabled={data.config.audio}
     />
-    <ConfigCard
+    <ConnectionsCard connections={data.app.connections ?? []} />
+
+<ConfigCard
       config={data.config}
       onSaved={(result) => {
         data = result;

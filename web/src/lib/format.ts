@@ -43,3 +43,20 @@ export function formatFPS(fps: number): string {
   if (!Number.isFinite(fps) || fps <= 0) return "0";
   return fps >= 10 ? fps.toFixed(0) : fps.toFixed(1);
 }
+
+// formatBytes keeps byte counts readable in the viewer list: the difference
+// between 3 MB and 300 MB is the difference between "just opened it" and "left it
+// running all night".
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+
+  return `${value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+}

@@ -35,6 +35,8 @@ export interface AppStatus {
   hls?: StreamURL[];
   /** audio is the WAV endpoint, when the camera's sound is enabled. */
   audio?: StreamURL[];
+  /** connections lists who is watching, through which output. */
+  connections?: Connection[];
   frames: number;
   fps: number;
   viewers: number;
@@ -42,6 +44,18 @@ export interface AppStatus {
   since?: string;
   updated?: string;
   error?: string;
+}
+
+/** One player: a held-open connection, or an HLS session inferred from requests. */
+export interface Connection {
+  /** ts, hls or wav */
+  kind: string;
+  remote: string;
+  since: string;
+  bytes: number;
+  /** Only meaningful for HLS, where the session is inferred. */
+  requests?: number;
+  last?: string;
 }
 
 export interface Config {

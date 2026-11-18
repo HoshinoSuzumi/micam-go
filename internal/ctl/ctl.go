@@ -44,6 +44,8 @@ type AppStatus struct {
 	HLS []status.StreamURL `json:"hls,omitempty"`
 	// Audio is the WAV endpoint, when the camera's sound is enabled.
 	Audio []status.StreamURL `json:"audio,omitempty"`
+	// Connections lists who is watching, through which output.
+	Connections []status.Connection `json:"connections,omitempty"`
 
 	Frames  int64   `json:"frames"`
 	FPS     float64 `json:"fps"`
@@ -231,6 +233,7 @@ func (s *Server) snapshot(actionErr error) StatusResponse {
 		app.URLs = snap.URLs
 		app.HLS = snap.HLS
 		app.Audio = snap.Audio
+		app.Connections = snap.Connections
 		app.Frames = snap.Frames
 		app.FPS = snap.FPS
 		app.Viewers = snap.Viewers
