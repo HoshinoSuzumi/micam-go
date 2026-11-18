@@ -2,6 +2,12 @@ package hls
 
 import "encoding/binary"
 
+// Track identifiers: the video track is always 1, sound (when present) is 2.
+const (
+	trackVideo = 1
+	trackAudio = 2
+)
+
 // mp4Timescale is the media clock of the fMP4 track: the same 90kHz the TS muxer
 // uses, so both outputs describe the same instants with the same numbers.
 const mp4Timescale = 90_000
@@ -54,11 +60,21 @@ var unityMatrix = func() []byte {
 // buildInit assembles the initialisation segment: the boxes a player must have
 // before it can decode any fragment. Everything here is constant for the life of
 // a stream, which is why it is built once and cached.
-func buildInit(info spsInfo, ps paramSets) []byte {
+//
+// audioChannels above zero adds a second track carrying Opus. It is included from
+// the start rather than added when the first audio packet arrives: changing the
+// init mid-stream changes the segment names and forces every connected player to
+// re-initialise.
+func buildInit(info spsInfo, ps paramSets, audioChannels int) []byte {
 	ftyp := box("ftyp",
 		[]byte("iso5"), u32(0),
 		[]byte("iso5"), []byte("iso6"), []byte("mp41"),
 	)
+
+	nextTrackID := uint32(2)
+	if audioChannels > 0 {
+		nextTrackID = 3
+	}
 
 	mvhd := fullBox("mvhd", 0, 0,
 		u32(0), u32(0), // creation, modification
@@ -67,12 +83,12 @@ func buildInit(info spsInfo, ps paramSets) []byte {
 		u32(0), u32(0), // reserved
 		unityMatrix,
 		u32(0), u32(0), u32(0), u32(0), u32(0), u32(0), // pre_defined
-		u32(2), // next_track_ID
+		u32(nextTrackID),
 	)
 
 	tkhd := fullBox("tkhd", 0, 0x3, // enabled, in movie
 		u32(0), u32(0), // creation, modification
-		u32(1), u32(0), // track_ID, reserved
+		u32(trackVideo), u32(0), // track_ID, reserved
 		u32(0),         // duration
 		u32(0), u32(0), // reserved
 		u16(0), u16(0), u16(0), u16(0), // layer, alternate_group, volume, reserved
@@ -111,13 +127,66 @@ func buildInit(info spsInfo, ps paramSets) []byte {
 	trak := box("trak", tkhd, mdia)
 
 	trex := fullBox("trex", 0, 0,
-		u32(1), // track_ID
-		u32(1), // default_sample_description_index
+		u32(trackVideo), // track_ID
+		u32(1),          // default_sample_description_index
 		u32(0), u32(0), u32(0),
 	)
-	mvex := box("mvex", trex)
+	boxes := [][]byte{mvhd, trak}
+	mvexBoxes := [][]byte{trex}
 
-	return append(ftyp, box("moov", mvhd, trak, mvex)...)
+	if audioChannels > 0 {
+		boxes = append(boxes, buildAudioTrak(audioChannels))
+		mvexBoxes = append(mvexBoxes, fullBox("trex", 0, 0,
+			u32(trackAudio), u32(1), u32(0), u32(0), u32(0),
+		))
+	}
+
+	mvex := box("mvex", mvexBoxes...)
+
+	return append(ftyp, box("moov", append(boxes, mvex)...)...)
+}
+
+// buildAudioTrak is the second track: Opus, 48 kHz, mono or stereo.
+func buildAudioTrak(channels int) []byte {
+	tkhd := fullBox("tkhd", 0, 0x3,
+		u32(0), u32(0),
+		u32(trackAudio), u32(0),
+		u32(0),
+		u32(0), u32(0),
+		u16(0), u16(0), u16(0x0100), u16(0), // layer, group, volume, reserved
+		unityMatrix,
+		u32(0), u32(0), // no width or height for sound
+	)
+
+	mdhd := fullBox("mdhd", 0, 0,
+		u32(0), u32(0),
+		u32(mp4Timescale), u32(0),
+		u16(0x55C4), u16(0),
+	)
+
+	hdlr := fullBox("hdlr", 0, 0,
+		u32(0),
+		[]byte("soun"),
+		u32(0), u32(0), u32(0),
+		append([]byte("SoundHandler"), 0),
+	)
+
+	smhd := fullBox("smhd", 0, 0, u16(0), u16(0))
+
+	dref := fullBox("dref", 0, 0, u32(1), fullBox("url ", 0, 1))
+	dinf := box("dinf", dref)
+
+	stsd := fullBox("stsd", 0, 0, u32(1), buildOpusSampleEntry(channels))
+	stts := fullBox("stts", 0, 0, u32(0))
+	stsc := fullBox("stsc", 0, 0, u32(0))
+	stsz := fullBox("stsz", 0, 0, u32(0), u32(0))
+	stco := fullBox("stco", 0, 0, u32(0))
+
+	stbl := box("stbl", stsd, stts, stsc, stsz, stco)
+	minf := box("minf", smhd, dinf, stbl)
+	mdia := box("mdia", mdhd, hdlr, minf)
+
+	return box("trak", tkhd, mdia)
 }
 
 // buildVisualSampleEntry is the hvc1 entry: the fixed fields of a visual sample
@@ -190,29 +259,46 @@ type fragmentSample struct {
 
 // buildFragment wraps samples in moof+mdat, the shape a player consumes as one
 // HLS segment.
-func buildFragment(sequence uint32, baseTime uint64, samples []fragmentSample) []byte {
+func buildFragment(sequence uint32, videoBase, audioBase uint64, video, audio []fragmentSample) []byte {
 	mfhd := fullBox("mfhd", 0, 0, u32(sequence))
 
 	// default-base-is-moof (0x020000) plus an explicit sample description index:
 	// without the first, the data offset in trun is relative to the file start,
 	// which is wrong for a fragment served on its own.
-	tfhd := fullBox("tfhd", 0, 0x020000|0x02, u32(1), u32(1))
-	tfdt := fullBox("tfdt", 1, 0, u64(baseTime))
+	videoTFHD := fullBox("tfhd", 0, 0x020000|0x02, u32(trackVideo), u32(1))
+	videoTFDT := fullBox("tfdt", 1, 0, u64(videoBase))
+	audioTFHD := fullBox("tfhd", 0, 0x020000|0x02, u32(trackAudio), u32(1))
+	audioTFDT := fullBox("tfdt", 1, 0, u64(audioBase))
 
-	trun := buildTrun(samples, 0)
-	moof := box("moof", mfhd, box("traf", tfhd, tfdt, trun))
-
-	// The data offset is relative to the start of the moof box, and the mdat
-	// header sits between them. Rebuilding is cheap: the size does not change.
-	trun = buildTrun(samples, uint32(len(moof))+8)
-	moof = box("moof", mfhd, box("traf", tfhd, tfdt, trun))
-
-	var payload []byte
+	var videoPayload, audioPayload []byte
 	totalTicks := uint32(0)
-	for _, s := range samples {
-		payload = append(payload, s.data...)
+	for _, s := range video {
+		videoPayload = append(videoPayload, s.data...)
 		totalTicks += s.duration
 	}
+	for _, s := range audio {
+		audioPayload = append(audioPayload, s.data...)
+	}
+
+	// Two passes: the trun data offsets depend on the size of the moof that
+	// contains them, and the size depends only on the sample counts, so the
+	// second pass produces the same layout with the real offsets.
+	build := func(videoOffset, audioOffset uint32) []byte {
+		trafs := [][]byte{
+			box("traf", videoTFHD, videoTFDT, buildTrun(video, videoOffset)),
+		}
+		if len(audio) > 0 {
+			trafs = append(trafs, box("traf", audioTFHD, audioTFDT, buildTrun(audio, audioOffset)))
+		}
+		return box("moof", append([][]byte{mfhd}, trafs...)...)
+	}
+
+	moof := build(0, 0)
+	videoOffset := uint32(len(moof)) + 8
+	audioOffset := videoOffset + uint32(len(videoPayload))
+	moof = build(videoOffset, audioOffset)
+
+	payload := append(videoPayload, audioPayload...)
 
 	// CMAF segments start with a segment type box, then an index, exactly the
 	// order ffmpeg writes. Both are optional in the specification and ffmpeg-based

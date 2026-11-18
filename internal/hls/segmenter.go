@@ -30,6 +30,9 @@ const (
 	// nominalFrameMS fills in a duration when two frames carry the same
 	// timestamp, which happens when a camera clock stalls.
 	nominalFrameMS = 50
+	// nominalAudioFrameMS is the same fallback for an Opus packet: 20ms frames
+	// are the usual case.
+	nominalAudioFrameMS = 20
 )
 
 // Segment is one encoded fragment and how long it plays.
@@ -80,6 +83,14 @@ type Segmenter struct {
 	mediaT   uint64
 	started  bool
 	dropped  int
+
+	// audio enables an Opus track beside the video. audioChannels comes from the
+	// first packet's table of contents; until then the track is declared mono,
+	// and rebuilt once if it turns out to be stereo.
+	audio         bool
+	audioChannels int
+	pendingAudio  []fragmentSample
+	audioArrivals []int64
 }
 
 // paramSets are the VPS/SPS/PPS triple carried in-band before each keyframe.
@@ -111,16 +122,27 @@ func (p *paramSets) update(nals [][]byte) bool {
 }
 
 // New builds a segmenter. A window below one is replaced by the default.
-func New(window int) *Segmenter {
+//
+// withAudio declares the Opus track from the start: adding it later would change
+// the init segment, and with it every segment name, forcing connected players to
+// re-initialise mid-stream.
+func New(window int, withAudio bool) *Segmenter {
 	if window < 1 {
 		window = DefaultWindow
 	}
-	return &Segmenter{window: window}
+	return &Segmenter{window: window, audio: withAudio}
 }
 
 // Write offers one access unit to the segmenter. It never blocks on viewers:
 // segments go into a ring buffer and the handlers read from there.
 func (s *Segmenter) Write(p miss.Packet) error {
+	if p.IsAudio() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.writeAudio(p)
+		return nil
+	}
+
 	if !p.IsVideo() || p.Codec != miss.CodecH265 {
 		// H.264 would need an avcC record and slightly different NAL rules.
 		return nil
@@ -145,7 +167,7 @@ func (s *Segmenter) Write(p miss.Packet) error {
 			// hvcC and could not build a decoder, hours after everything had been
 			// working.
 			if s.ready() {
-				s.init = buildInit(s.info, s.params)
+				s.init = buildInit(s.info, s.params, s.audioTrackChannels())
 				s.initName = initFileName(s.init)
 			}
 		}
@@ -171,7 +193,7 @@ func (s *Segmenter) Write(p miss.Packet) error {
 			return nil
 		}
 		s.started = true
-		s.init = buildInit(s.info, s.params)
+		s.init = buildInit(s.info, s.params, s.audioTrackChannels())
 		s.initName = initFileName(s.init)
 	}
 
@@ -183,6 +205,58 @@ func (s *Segmenter) Write(p miss.Packet) error {
 // ready reports whether an init segment can be built at all.
 func (s *Segmenter) ready() bool {
 	return s.hasSPS && len(s.params.vps) > 0 && len(s.params.sps) > 0 && len(s.params.pps) > 0
+}
+
+// audioTrackChannels is the channel count to declare for the Opus track, or zero
+// when there is no audio track at all.
+func (s *Segmenter) audioTrackChannels() int {
+	if !s.audio {
+		return 0
+	}
+	if s.audioChannels == 0 {
+		// Nothing has arrived yet; mono is the safe guess and it is rebuilt once
+		// the first packet says otherwise.
+		return 1
+	}
+	return s.audioChannels
+}
+
+// writeAudio queues one Opus packet. The caller holds the lock.
+func (s *Segmenter) writeAudio(p miss.Packet) {
+	if !s.audio || !s.started || len(p.Payload) == 0 {
+		return
+	}
+
+	origin, ok := s.clock.Origin()
+	if !ok {
+		return
+	}
+
+	// The first packet decides the channel count. Rebuilding the init changes the
+	// segment names, which is why it happens once, at the very start.
+	if s.audioChannels == 0 {
+		channels := opusChannels(p.Payload[0])
+		if channels != 1 || s.init != nil {
+			s.audioChannels = channels
+			if s.init != nil {
+				s.init = buildInit(s.info, s.params, s.audioTrackChannels())
+				s.initName = initFileName(s.init)
+			}
+		} else {
+			s.audioChannels = channels
+		}
+	}
+
+	elapsed := p.TimestampMS - origin
+	if elapsed < 0 {
+		elapsed = 0
+	}
+
+	s.pendingAudio = append(s.pendingAudio, fragmentSample{
+		data: append([]byte(nil), p.Payload...),
+		key:  true, // every Opus packet decodes on its own
+	})
+	s.audioArrivals = append(s.audioArrivals, elapsed)
 }
 
 // buildSample turns the picture NALs of one access unit into a length-prefixed
@@ -254,7 +328,29 @@ func (s *Segmenter) flush(endMS int64) {
 		total += s.pending[i].duration
 	}
 
-	data := buildFragment(uint32(s.seq+1), s.mediaT, s.pending)
+	// Audio spans the same interval, so it is trimmed and measured the same way.
+	// Its timeline starts from the video clock's origin, which keeps the two
+	// tracks aligned even when sound only begins seconds after the picture.
+	audioBase := uint64(0)
+	if len(s.pendingAudio) > 0 {
+		audioBase = uint64(s.audioArrivals[0]) * mp4Timescale / 1000
+		for i := range s.pendingAudio {
+			end := endMS
+			if i+1 < len(s.pendingAudio) {
+				end = s.audioArrivals[i+1]
+			}
+			ms := end - s.audioArrivals[i]
+			if ms <= 0 {
+				ms = nominalAudioFrameMS
+			}
+			s.pendingAudio[i].duration = uint32(ms * mp4Timescale / 1000)
+			if s.pendingAudio[i].duration == 0 {
+				s.pendingAudio[i].duration = 1
+			}
+		}
+	}
+
+	data := buildFragment(uint32(s.seq+1), s.mediaT, audioBase, s.pending, s.pendingAudio)
 
 	seg := &Segment{
 		Seq:      s.seq,
@@ -272,6 +368,8 @@ func (s *Segmenter) flush(endMS int64) {
 	s.seq++
 	s.pending = s.pending[:0]
 	s.arrivals = s.arrivals[:0]
+	s.pendingAudio = s.pendingAudio[:0]
+	s.audioArrivals = s.audioArrivals[:0]
 }
 
 // Flush closes the open segment early.

@@ -34,7 +34,10 @@ func TestAgainstACapture(t *testing.T) {
 		t.Fatalf("sample has %d access units, need at least 2", len(aus))
 	}
 
-	segmenter := New(DefaultWindow)
+	// MICAM_HEVC_AUDIO=1 adds a synthetic Opus track, so the dumped playlist can
+	// be checked with ffprobe for two streams.
+	withAudio := os.Getenv("MICAM_HEVC_AUDIO") != ""
+	segmenter := New(DefaultWindow, withAudio)
 
 	// The capture is 20 fps; the real timestamps matter only for monotonicity.
 	for i, au := range aus {
@@ -48,6 +51,20 @@ func TestAgainstACapture(t *testing.T) {
 		}
 		if err := segmenter.Write(p); err != nil {
 			t.Fatalf("write frame %d: %v", i, err)
+		}
+
+		if withAudio {
+			// Two audio packets per video frame: 20 ms of Opus at 20 fps.
+			for j := 0; j < 2; j++ {
+				audio := miss.Packet{
+					Codec:       miss.CodecOpus,
+					TimestampMS: int64(i)*50 + int64(j)*25,
+					Payload:     fakeOpusPacket(),
+				}
+				if err := segmenter.Write(audio); err != nil {
+					t.Fatalf("write audio %d: %v", i, err)
+				}
+			}
 		}
 	}
 	// A live stream would leave the last segment open until the next keyframe.
@@ -98,6 +115,13 @@ func TestAgainstACapture(t *testing.T) {
 		}
 		t.Logf("wrote segments to %s", out)
 	}
+}
+
+// fakeOpusPacket is a plausible-looking Opus frame: a CELT fullband 20ms TOC
+// byte for mono, followed by payload. The bytes are not decodable audio, but the
+// container is what this test is about.
+func fakeOpusPacket() []byte {
+	return append([]byte{0xF8}, make([]byte, 40)...)
 }
 
 // dump writes exactly the files the playlist names, in the layout the HTTP

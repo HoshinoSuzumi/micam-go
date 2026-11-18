@@ -106,7 +106,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc(s.cfg.Path, s.handle)
 
 	if s.cfg.HLS {
-		s.seg = hls.New(s.cfg.HLSWindow)
+		s.seg = hls.New(s.cfg.HLSWindow, s.cfg.Audio)
 		mux.HandleFunc(s.HLSPlaylistPath(), s.handlePlaylist)
 		// A trailing slash is required: patterns without one match exactly in
 		// Go 1.22's mux, so "/cam/seg" would never see "/cam/seg0.m4s".

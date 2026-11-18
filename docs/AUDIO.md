@@ -316,3 +316,67 @@ audio arrived codec=PCMA  → 停在 A，除非接受 cgo + fdk-aac
 ```
 
 B 阶段要改的两处已经写在 §4.2，不重复。
+---
+
+# 13. 路线 B1 已实现：Opus 进 HLS 音轨（2026-11-18）
+
+## 13.1 结论先行
+
+真机测出来相机给的是 **Opus（codec 1032）**，不是 PCMA。这改变了优先级：
+
+- 路线 A 对这台相机**无效**：Opus 是压缩编码，展开不成 PCM，`/cam.wav` 只会输出 44 字节头
+- 路线 B1 成立：Opus 包原样进 fMP4 的第二个 track，**零转码、零依赖**
+
+## 13.2 实现
+
+| 文件 | 内容 |
+|---|---|
+| `internal/hls/opus.go` | `Opus` sample entry + `dOps` 解码配置记录；从 TOC 读声道数 |
+| `internal/hls/fmp4.go` | `moov` 第二个 `trak`；每个分片两个 `traf`（视频/音频），两段 `mdat` 数据按顺序排列 |
+| `internal/hls/segmenter.go` | 音频包进自己的 pending 队列，随视频关键帧一起封片 |
+| `internal/ts/clock.go` | `Origin()`：音频用视频时钟的原点，避免音频晚到几秒就整体错位 |
+
+关键取舍：
+
+- **音轨从第一次构建 init 时就存在**，不是"收到第一包再加"。后者会改变 init 的名字（内容寻址），
+  逼所有已连接的播放器重新初始化。
+- **音频时间轴以视频时钟的原点为基准**：`elapsed = audioTS - videoOrigin`。各自归一化会在
+  音频晚到时产生几秒的 A/V 偏移。
+- **每个 `traf` 的 `trun.data_offset` 指向 `mdat` 里自己那段数据**：视频在前，音频紧随其后，
+  两段首尾相接，测试里断言了这一点。
+
+## 13.3 验证
+
+真实抓包（2880×1620，100 帧）+ 合成 Opus 包，`ffprobe`：
+
+```
+0,hevc,video
+1,opus,audio          channels=1  sample_rate=48000  codec_tag=Opus
+nb_read_frames=120    （60 视频帧 × 每帧 2 个音频包）
+```
+
+视频轨仍然解码零错误。分片结构：
+
+```
+moof
+  traf (track 1, 60 samples, 230865 字节) → data_offset 2400
+  traf (track 2, 120 samples, 4920 字节)  → data_offset 233265 = 2400 + 230865
+mdat 238185 = 两轨数据总和，不多不少
+```
+
+## 13.4 iOS 的确定性仍然有限
+
+Apple 的 HLS 规范只列 AAC，Opus 是"实现上能用、文档里没有"。iOS 17+ 能播的消息来自
+[开发者论坛](https://developer.apple.com/forums/thread/759210)，不是规范。所以：
+
+- Chrome / Edge / VLC / mpv：确定可以
+- iOS 17+：大概率可以，需要真机确认
+- iOS 16 及更早：静音
+
+如果真机验证失败，唯一出路是 AAC（§4.2 的 B2），那需要 cgo 编码器，与静态单二进制冲突。
+
+## 13.5 还没做
+
+- **TS 里的音频**：Opus 可以进 MPEG-TS（§12.2 实测过），`ts.Muxer` 加一个 `stream_type 0x06`
+  + `Opus` 注册描述符的 PID 即可，约 1 天。播放器支持比 fMP4 窄得多，等确认需要再做。
+- **`/cam.wav` 的去留**：对 Opus 相机它永远只有头。保留是因为 PCMA 相机（其它型号）仍然适用。

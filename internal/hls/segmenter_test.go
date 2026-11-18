@@ -46,7 +46,7 @@ func accessUnitWithSets(t *testing.T, vclType int, tsMS int64, key bool, vps, sp
 }
 
 func TestNothingIsPublishedBeforeAKeyframe(t *testing.T) {
-	s := New(DefaultWindow)
+	s := New(DefaultWindow, false)
 
 	for i := 0; i < 10; i++ {
 		if err := s.Write(accessUnit(t, nalTypeTrailR, int64(i)*50, false)); err != nil {
@@ -70,7 +70,7 @@ func TestNothingIsPublishedBeforeAKeyframe(t *testing.T) {
 }
 
 func TestKeyframeStartsTheStream(t *testing.T) {
-	s := New(DefaultWindow)
+	s := New(DefaultWindow, false)
 
 	if err := s.Write(accessUnit(t, nalTypeIDRWRADL, 0, true)); err != nil {
 		t.Fatalf("write: %v", err)
@@ -86,7 +86,7 @@ func TestKeyframeStartsTheStream(t *testing.T) {
 }
 
 func TestSegmentIsClosedByTheNextKeyframe(t *testing.T) {
-	s := New(DefaultWindow)
+	s := New(DefaultWindow, false)
 
 	s.Write(accessUnit(t, nalTypeIDRWRADL, 0, true))
 	for i := 1; i <= 40; i++ { // 40 frames at 20fps: two seconds
@@ -125,7 +125,7 @@ func TestSegmentIsClosedByTheNextKeyframe(t *testing.T) {
 }
 
 func TestWindowSlidesAndForgets(t *testing.T) {
-	s := New(3)
+	s := New(3, false)
 
 	for i := 0; i < 5; i++ {
 		s.Write(accessUnit(t, nalTypeIDRWRADL, int64(i)*2000, true))
@@ -151,7 +151,7 @@ func TestWindowSlidesAndForgets(t *testing.T) {
 }
 
 func TestPlaylistShape(t *testing.T) {
-	s := New(DefaultWindow)
+	s := New(DefaultWindow, false)
 	s.Write(accessUnit(t, nalTypeIDRWRADL, 0, true))
 	s.Write(accessUnit(t, nalTypeTrailR, 50, false))
 	s.Write(accessUnit(t, nalTypeIDRWRADL, 2000, true))
@@ -172,7 +172,7 @@ func TestPlaylistShape(t *testing.T) {
 }
 
 func TestPlaylistURIsAreRelativeToThePlaylist(t *testing.T) {
-	s := New(DefaultWindow)
+	s := New(DefaultWindow, false)
 	s.Write(accessUnit(t, nalTypeIDRWRADL, 0, true))
 	s.Write(accessUnit(t, nalTypeTrailR, 50, false))
 	s.Write(accessUnit(t, nalTypeIDRWRADL, 2000, true))
@@ -194,7 +194,7 @@ func TestPlaylistURIsAreRelativeToThePlaylist(t *testing.T) {
 // could not build a decoder, so playback stopped working long after it had
 // started.
 func TestInitSurvivesAParameterSetChange(t *testing.T) {
-	s := New(DefaultWindow)
+	s := New(DefaultWindow, false)
 
 	s.Write(accessUnit(t, nalTypeIDRWRADL, 0, true))
 	s.Write(accessUnit(t, nalTypeTrailR, 50, false))
@@ -229,7 +229,7 @@ func TestInitSurvivesAParameterSetChange(t *testing.T) {
 }
 
 func TestIgnoresWhatItCannotPackage(t *testing.T) {
-	s := New(DefaultWindow)
+	s := New(DefaultWindow, false)
 
 	// Audio frames are dropped.
 	s.Write(miss.Packet{Codec: miss.CodecPCMA, TimestampMS: 0, Payload: []byte{1, 2, 3}})
@@ -244,7 +244,7 @@ func TestIgnoresWhatItCannotPackage(t *testing.T) {
 }
 
 func TestFlushClosesTheOpenSegment(t *testing.T) {
-	s := New(DefaultWindow)
+	s := New(DefaultWindow, false)
 	s.Write(accessUnit(t, nalTypeIDRWRADL, 0, true))
 	s.Write(accessUnit(t, nalTypeTrailR, 50, false))
 

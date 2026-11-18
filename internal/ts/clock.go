@@ -39,3 +39,13 @@ func (c *Clock) Advance(timestampMS int64) int64 {
 	}
 	return c.elapsedMS
 }
+
+// Origin reports the camera timestamp of the first frame, which is what a second
+// track needs to place itself on the same timeline.
+//
+// Audio cannot use its own clock: it may start seconds after the video (or only
+// when there is noise), and normalising it independently would shift the sound
+// against the picture by however long that gap was.
+func (c *Clock) Origin() (int64, bool) {
+	return c.previous, c.started
+}

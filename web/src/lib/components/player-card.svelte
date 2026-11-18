@@ -173,7 +173,7 @@
         <div class="flex flex-wrap items-baseline gap-x-2">
           <span class="text-xs font-medium">声音（WAV）</span>
           <span class="text-[11px] text-muted-foreground">
-            独立地址，用播放器单独打开；视频流里没有音频
+            仅摄像头给 G.711 时可用；这台是 Opus，声音在上面那条 HLS 里
           </span>
         </div>
 

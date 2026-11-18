@@ -23,7 +23,7 @@ func TestInitBoxSizesMatchTheSpec(t *testing.T) {
 		pps: mustHex(t, ppsHex),
 	}
 
-	init := buildInit(info, ps)
+	init := buildInit(info, ps, 0)
 
 	moov := child(init, 0, "moov")
 	if moov == nil {
@@ -47,16 +47,138 @@ func TestInitBoxSizesMatchTheSpec(t *testing.T) {
 	}
 }
 
+// TestInitHasAnAudioTrackWhenAsked covers the second track: an Opus sample entry
+// with its decoder configuration record, and a trex for it in mvex.
+func TestInitHasAnAudioTrackWhenAsked(t *testing.T) {
+	info, err := parseSPS(mustHex(t, spsHex))
+	if err != nil {
+		t.Fatalf("parseSPS: %v", err)
+	}
+	ps := paramSets{
+		vps: mustHex(t, vpsHex),
+		sps: mustHex(t, spsHex),
+		pps: mustHex(t, ppsHex),
+	}
+
+	init := buildInit(info, ps, 2)
+
+	moov := child(init, 0, "moov")
+	if moov == nil {
+		t.Fatal("no moov")
+	}
+
+	traks := children(moov, 8, "trak")
+	if len(traks) != 2 {
+		t.Fatalf("moov has %d traks, want 2", len(traks))
+	}
+	if len(children(init, 8, "trak")) != 0 {
+		t.Fatal("a trak escaped the moov")
+	}
+
+	// The second track is the audio one: 'soun' handler, Opus entry, dOps record.
+	hdlr := descend(traks[1], "mdia", "hdlr")
+	if hdlr == nil {
+		t.Fatal("the second trak has no hdlr")
+	}
+	if got := string(hdlr[16:20]); got != "soun" {
+		t.Fatalf("handler type = %q, want soun", got)
+	}
+
+	stsd := descend(traks[1], "mdia", "minf", "stbl", "stsd")
+	if stsd == nil {
+		t.Fatal("no stsd in the audio track")
+	}
+	if got := string(stsd[20:24]); got != "Opus" {
+		t.Fatalf("audio sample entry is %q, want Opus", got)
+	}
+	if child(stsd[16:], 36, "dOps") == nil {
+		t.Fatal("the Opus entry has no dOps record")
+	}
+
+	// And no audio track when none was asked for.
+	if traks := children(child(buildInit(info, ps, 0), 0, "moov"), 8, "trak"); len(traks) != 1 {
+		t.Fatalf("video-only init has %d traks, want 1", len(traks))
+	}
+}
+
+// TestFragmentCarriesBothTracks checks the two trafs and, more importantly, that
+// the second track's samples start right after the first track's bytes.
+func TestFragmentCarriesBothTracks(t *testing.T) {
+	video := []fragmentSample{
+		{data: make([]byte, 100), duration: 4500, key: true},
+		{data: make([]byte, 50), duration: 4500, key: false},
+	}
+	audio := []fragmentSample{
+		{data: make([]byte, 20), duration: 900, key: true},
+		{data: make([]byte, 20), duration: 900, key: true},
+	}
+
+	data := buildFragment(1, 0, 0, video, audio)
+
+	moof := child(data, 0, "moof")
+	mdat := child(data, 0, "mdat")
+	if moof == nil || mdat == nil {
+		t.Fatal("missing moof or mdat")
+	}
+
+	trafs := children(moof, 8, "traf")
+	if len(trafs) != 2 {
+		t.Fatalf("moof has %d trafs, want 2", len(trafs))
+	}
+
+	videoOffset := int(int32(binary.BigEndian.Uint32(child(trafs[0], 8, "trun")[16:20])))
+	audioOffset := int(int32(binary.BigEndian.Uint32(child(trafs[1], 8, "trun")[16:20])))
+
+	if want := len(moof) + 8; videoOffset != want {
+		t.Fatalf("video data offset = %d, want %d", videoOffset, want)
+	}
+	if want := videoOffset + 150; audioOffset != want {
+		t.Fatalf("audio data offset = %d, want %d (after the video bytes)", audioOffset, want)
+	}
+	if got := len(mdat) - 8; got != 150+40 {
+		t.Fatalf("mdat payload is %d bytes, want %d", got, 190)
+	}
+}
+
+// descend walks a chain of boxes, each nested directly inside the previous one.
+func descend(box []byte, path ...string) []byte {
+	cur := box
+	for _, name := range path {
+		found := child(cur, 8, name)
+		if found == nil {
+			return nil
+		}
+		cur = found
+	}
+	return cur
+}
+
+// children returns every box of the given type starting at off.
+func children(data []byte, off int, want string) [][]byte {
+	var out [][]byte
+	for off+8 <= len(data) {
+		size := int(binary.BigEndian.Uint32(data[off : off+4]))
+		if size < 8 || off+size > len(data) {
+			return out
+		}
+		if string(data[off+4:off+8]) == want {
+			out = append(out, data[off:off+size])
+		}
+		off += size
+	}
+	return out
+}
+
 // TestFragmentHasATraf covers the box that was missing once: tfhd, tfdt and trun
 // belong inside a traf, and a moof that lists them directly is malformed.
 //
 // ffmpeg's demuxer scans for those boxes and happily decoded the result, so the
 // segments looked fine until a browser refused to build a track from them.
 func TestFragmentHasATraf(t *testing.T) {
-	data := buildFragment(1, 0, []fragmentSample{
+	data := buildFragment(1, 0, 0, []fragmentSample{
 		{data: []byte{0, 0, 0, 2, 0x40, 0x01}, duration: 4500, key: true},
 		{data: []byte{0, 0, 0, 2, 0x02, 0x01}, duration: 4500, key: false},
-	})
+	}, nil)
 
 	moof := child(data, 0, "moof")
 	if moof == nil {
@@ -86,7 +208,7 @@ func TestFragmentDataOffsetPointsAtMdat(t *testing.T) {
 		{data: []byte{0, 0, 0, 2, 0x40, 0x01}, duration: 4500, key: true},
 		{data: []byte{0, 0, 0, 2, 0x02, 0x01}, duration: 4500, key: false},
 	}
-	data := buildFragment(7, 0, samples)
+	data := buildFragment(7, 0, 0, samples, nil)
 
 	moof := child(data, 0, "moof")
 	mdat := child(data, 0, "mdat")

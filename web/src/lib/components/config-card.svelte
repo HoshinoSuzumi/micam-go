@@ -245,7 +245,7 @@
           <option value="off">关闭</option>
         </Select>
         <p class="text-[11px] text-muted-foreground">
-          声音不在视频流里：MPEG-TS 和 HLS 都装不下这个摄像头的 G.711。
+          Opus 摄像头的声音会进 HLS 那条流；G.711 摄像头走单独的 /cam.wav。
         </p>
       </div>
 
