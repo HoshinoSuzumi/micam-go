@@ -17,21 +17,34 @@ const (
 	readTimeout       = 500 * time.Millisecond
 )
 
-// Variables, not constants, so tests can shorten them - the same convention as
-// lanPort in lan.go.
-var (
-	// watchdogInterval is how often the session checks whether media is still
-	// flowing.
-	watchdogInterval = time.Second
-	// mediaIdleTimeout is how long the camera may stay silent before the session
-	// is declared dead.
+// timings are the intervals a session supervises itself with.
+//
+// They are a value carried by the Conn rather than package variables. Tests used
+// to shorten the globals just before Start, which raced with the watchdog
+// goroutine reading them, and leaked the setting into any other test running at
+// the same time. Passing them in keeps every session's clock its own: the
+// goroutine start is the happens-before boundary, so no lock is needed.
+type timings struct {
+	// watchdog is how often the session checks whether media is still flowing.
+	watchdog time.Duration
+	// mediaIdle is how long the camera may stay silent before the session is
+	// declared dead.
 	//
 	// A half-open connection never reports an error: the peer disappears, the
 	// kernel keeps the socket, and reads simply time out forever. Without this the
 	// relay would sit in front of a frozen picture, never retrying and never
 	// telling anyone.
-	mediaIdleTimeout = 15 * time.Second
-)
+	mediaIdle time.Duration
+}
+
+// defaultTimings is what a real session uses. A function, not a variable: there is
+// no reason for anything to change the production clock, and a var would invite it.
+func defaultTimings() timings {
+	return timings{
+		watchdog:  time.Second,
+		mediaIdle: 15 * time.Second,
+	}
+}
 
 // ErrPeerClosed reports that the camera ended the session it accepted.
 var ErrPeerClosed = errors.New("pppp: the camera closed the session")
@@ -68,6 +81,9 @@ type Conn struct {
 	// lastMedia is the UnixNano of the last media message, or 0 before the first.
 	lastMedia atomic.Int64
 
+	// t is set once, before Start, and read only by the goroutines Start creates.
+	t timings
+
 	errMu  sync.Mutex
 	reason error
 
@@ -79,10 +95,16 @@ type Conn struct {
 // NewConn wraps an established session. local is what the 0x28 reply reports as
 // our address; it is only used on the relay path.
 func NewConn(link Link, local Addr, log *slog.Logger) *Conn {
+	return newConn(link, local, log, defaultTimings())
+}
+
+// newConn is NewConn with the supervision intervals given explicitly.
+func newConn(link Link, local Addr, log *slog.Logger, t timings) *Conn {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Conn{
+		t:            t,
 		link:         link,
 		local:        local,
 		log:          log,
@@ -132,7 +154,7 @@ func (c *Conn) keepaliveLoop() {
 // It only arms once media has arrived: before the first frame the channel is
 // legitimately silent, and the authentication handshake can take seconds.
 func (c *Conn) watchdog() {
-	ticker := time.NewTicker(watchdogInterval)
+	ticker := time.NewTicker(c.t.watchdog)
 	defer ticker.Stop()
 
 	for {
@@ -144,7 +166,7 @@ func (c *Conn) watchdog() {
 			if last == 0 {
 				continue
 			}
-			if time.Since(time.Unix(0, last)) >= mediaIdleTimeout {
+			if time.Since(time.Unix(0, last)) >= c.t.mediaIdle {
 				c.fail(ErrMediaIdle)
 				return
 			}

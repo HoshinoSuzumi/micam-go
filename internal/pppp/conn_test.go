@@ -22,9 +22,7 @@ func drwMessage(body string) []byte {
 // leaves a socket that never errors. The session must still end, or the relay sits
 // in front of a frozen picture forever and never retries.
 func TestConnWatchdogEndsAQuietSession(t *testing.T) {
-	oldIdle, oldInterval := mediaIdleTimeout, watchdogInterval
-	mediaIdleTimeout, watchdogInterval = 50*time.Millisecond, 10*time.Millisecond
-	t.Cleanup(func() { mediaIdleTimeout, watchdogInterval = oldIdle, oldInterval })
+	clock := timings{watchdog: 10 * time.Millisecond, mediaIdle: 50 * time.Millisecond}
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -37,7 +35,7 @@ func TestConnWatchdogEndsAQuietSession(t *testing.T) {
 		t.Fatalf("DialTCP: %v", err)
 	}
 
-	conn := NewConn(link, Addr{}, discardLogger())
+	conn := newConn(link, Addr{}, discardLogger(), clock)
 	conn.Start()
 	defer conn.Close()
 
@@ -72,9 +70,7 @@ func TestConnWatchdogEndsAQuietSession(t *testing.T) {
 // Before the first frame the channel is legitimately silent: the watchdog must not
 // kill a session that is still completing the handshake.
 func TestConnWatchdogWaitsForTheFirstFrame(t *testing.T) {
-	oldIdle, oldInterval := mediaIdleTimeout, watchdogInterval
-	mediaIdleTimeout, watchdogInterval = 30*time.Millisecond, 5*time.Millisecond
-	t.Cleanup(func() { mediaIdleTimeout, watchdogInterval = oldIdle, oldInterval })
+	clock := timings{watchdog: 5 * time.Millisecond, mediaIdle: 30 * time.Millisecond}
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -87,7 +83,7 @@ func TestConnWatchdogWaitsForTheFirstFrame(t *testing.T) {
 		t.Fatalf("DialTCP: %v", err)
 	}
 
-	conn := NewConn(link, Addr{}, discardLogger())
+	conn := newConn(link, Addr{}, discardLogger(), clock)
 	conn.Start()
 	defer conn.Close()
 
@@ -181,9 +177,7 @@ func TestConnErrIsNilAfterALocalClose(t *testing.T) {
 // that disconnected: without arming the clock the watchdog would wait for a first
 // frame that never comes, and the session would hang in "connecting" forever.
 func TestConnWatchdogFiresWhenVideoNeverStarts(t *testing.T) {
-	oldIdle, oldInterval := mediaIdleTimeout, watchdogInterval
-	mediaIdleTimeout, watchdogInterval = 50*time.Millisecond, 10*time.Millisecond
-	t.Cleanup(func() { mediaIdleTimeout, watchdogInterval = oldIdle, oldInterval })
+	clock := timings{watchdog: 10 * time.Millisecond, mediaIdle: 50 * time.Millisecond}
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -196,7 +190,7 @@ func TestConnWatchdogFiresWhenVideoNeverStarts(t *testing.T) {
 		t.Fatalf("DialTCP: %v", err)
 	}
 
-	conn := NewConn(link, Addr{}, discardLogger())
+	conn := newConn(link, Addr{}, discardLogger(), clock)
 	conn.Start()
 	defer conn.Close()
 
