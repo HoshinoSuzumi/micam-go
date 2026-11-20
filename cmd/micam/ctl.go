@@ -45,6 +45,14 @@ func runWriteConfig() int {
 		IdleStop:  intOr(os.Getenv("wizard_idle_stop"), 0),
 		PassToken: os.Getenv("wizard_pass_token"),
 	}
+	// 访问控制只由管理界面维护。向导保存的是连接参数，把整份配置重写会顺手
+	// 删掉刚配好的 token，而用户不会想到「改个清晰度」还有这个副作用。
+	if stored, err := ctl.LoadConfig(paths.EnvFile()); err == nil {
+		cfg.Tokens = stored.Tokens
+		cfg.AllowCIDR = stored.AllowCIDR
+		cfg.TrustIfaces = stored.TrustIfaces
+	}
+
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintln(os.Stderr, "micam:", err)
 		return exitLogin
