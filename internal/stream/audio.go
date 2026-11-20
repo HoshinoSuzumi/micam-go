@@ -25,6 +25,7 @@ type audioViewer struct {
 	warned  bool
 
 	remote string
+	auth   string
 	since  time.Time
 	bytes  atomic.Int64
 }
@@ -76,6 +77,7 @@ func (s *Server) handleAudio(w http.ResponseWriter, r *http.Request) {
 	v := &audioViewer{
 		packets: make(chan miss.Packet, audioQueue),
 		remote:  clientIP(r),
+		auth:    identityLabel(r),
 		since:   time.Now(),
 	}
 

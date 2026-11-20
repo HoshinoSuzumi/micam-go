@@ -132,15 +132,23 @@ func noteState(rep *status.Reporter, server *stream.Server, st status.State, err
 func startStreamServer(opts *cli.Options, rep *status.Reporter,
 	log *slog.Logger) (*stream.Server, []stream.ReachableURL, int) {
 
+	policy, err := buildAuth(opts, log)
+	if err != nil {
+		log.Error("cannot apply access control", "err", err)
+		return nil, nil, exitLogin
+	}
+
 	addr := net.JoinHostPort(opts.Bind, strconv.Itoa(opts.Port))
 	server := stream.New(stream.Config{
-		Addr:      addr,
-		Path:      "/cam.ts",
-		PTSLeadMS: opts.PTSLeadMS,
-		HLS:       opts.HLS,
-		HLSWindow: opts.HLSWindow,
-		Audio:     opts.Audio,
-		AudioRate: opts.AudioRate,
+		Addr:          addr,
+		Path:          "/cam.ts",
+		PTSLeadMS:     opts.PTSLeadMS,
+		HLS:           opts.HLS,
+		HLSWindow:     opts.HLSWindow,
+		Audio:         opts.Audio,
+		AudioRate:     opts.AudioRate,
+		Auth:          policy,
+		PublicMetrics: opts.PublicMetrics,
 	}, log)
 	if err := server.Start(); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "in use") {
@@ -182,6 +190,15 @@ func startStreamServer(opts *cli.Options, rep *status.Reporter,
 		rep.BindAudio(audio)
 	}
 
+	if !policy.Enabled() && !server.Loopback() {
+		// Reachable by anyone who can route to this port: the LAN, the tailnet,
+		// and whatever forwards it. Say so once, loudly, instead of leaving it to
+		// be discovered.
+		log.Warn("the stream has no access control: anyone who can reach this port can watch and listen",
+			"listen", server.Addr(),
+			"hint", "set --token, or add a token in the fnOS app UI")
+	}
+
 	if server.Loopback() {
 		// The single most confusing failure: everything looks healthy, but nothing
 		// outside this machine can reach the stream.
@@ -212,33 +229,66 @@ func printBanner(server *stream.Server, reachable []stream.ReachableURL, opts *c
 		player = reachable[0].URL
 	}
 	fmt.Println()
-	fmt.Printf("    mpv    %s\n", player)
-	fmt.Printf("    vlc    %s\n", player)
-	fmt.Printf("    ffplay %s\n", player)
+	fmt.Printf("    mpv    %s\n", withCredential(player, credential(server)))
+	fmt.Printf("    vlc    %s\n", withCredential(player, credential(server)))
+	fmt.Printf("    ffplay %s\n", withCredential(player, credential(server)))
+	if token := credential(server); token != "" {
+		fmt.Printf("\n    访问控制已启用，命令里带的是第一个 token（共 %d 个）。\n", len(server.Auth().Tokens()))
+	}
 
 	if opts.HLS {
 		fmt.Println()
 		fmt.Println("  HLS (Safari / iOS):")
+		hls := server.HLSURLOf(server.URL())
 		if len(reachable) > 0 {
-			fmt.Printf("    %s\n", server.HLSURLOf(reachable[0].URL))
+			hls = server.HLSURLOf(reachable[0].URL)
+		}
+		if token := credential(server); token != "" {
+			// Safari cannot set a header on <video>, so this is the form that
+			// works there: the playlist hands the credential to the segments.
+			fmt.Printf("    %s?token=%s\n", hls, token)
 		} else {
-			fmt.Printf("    %s\n", server.HLSURLOf(server.URL()))
+			fmt.Printf("    %s\n", hls)
 		}
 	}
 
 	if opts.Audio {
 		fmt.Println("  Audio (WAV):")
+		audioURL := server.AudioURLOf(server.URL())
 		if len(reachable) > 0 {
-			fmt.Printf("    %s\n", server.AudioURLOf(reachable[0].URL))
-		} else {
-			fmt.Printf("    %s\n", server.AudioURLOf(server.URL()))
+			audioURL = server.AudioURLOf(reachable[0].URL)
 		}
+		fmt.Printf("    %s\n", withCredential(audioURL, credential(server)))
 	}
 	fmt.Println()
 
 	if opts.IdleStop > 0 {
 		fmt.Printf("  无人观看 %d 分钟后释放摄像头，有人连上再重新拉流。\n\n", opts.IdleStop)
 	}
+}
+
+// credential is the first configured token, for the copy-paste lines.
+func credential(server *stream.Server) string {
+	tokens := server.Auth().Tokens()
+	if len(tokens) == 0 {
+		return ""
+	}
+	return tokens[0].Secret
+}
+
+// withCredential puts the token in the URL's userinfo, which every mainstream
+// player understands: mpv, VLC and ffmpeg all pass it on as Basic auth.
+func withCredential(rawURL, token string) string {
+	if token == "" {
+		return rawURL
+	}
+	// Insert after the scheme rather than matching "http://": the same line has to
+	// keep working if the stream is ever served over TLS.
+	scheme := "http://"
+	if strings.HasPrefix(rawURL, "https://") {
+		scheme = "https://"
+	}
+	return strings.Replace(rawURL, scheme, scheme+"micam:"+token+"@", 1)
 }
 
 // maxReconnectDelay caps the backoff so a camera that reboots comes back

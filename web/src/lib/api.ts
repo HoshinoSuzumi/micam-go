@@ -54,11 +54,25 @@ export interface AppStatus {
   error?: string;
 }
 
+/** A stream credential, named so one device can be revoked on its own. */
+export interface AuthToken {
+  label: string;
+  secret: string;
+}
+
+/** One expiring link, minted for a guest. */
+export interface ShareLink {
+  url: string;
+  iface?: string;
+}
+
 /** One player: a held-open connection, or an HLS session inferred from requests. */
 export interface Connection {
   /** ts, hls or wav */
   kind: string;
   remote: string;
+  /** How they got in: loopback, cidr:192.168.0.0/24, token:客厅. */
+  auth?: string;
   since: string;
   bytes: number;
   /** Only meaningful for HLS, where the session is inferred. */
@@ -85,6 +99,14 @@ export interface Config {
   audio: boolean;
   /** audio_rate goes into the WAV header. */
   audio_rate: number;
+  /** tokens are the stream's own credentials; empty means no access control. */
+  tokens: AuthToken[];
+  /** allow_cidr lists networks that need no credential. */
+  allow_cidr: string[];
+  /** trust_ifaces lists interfaces whose clients need no credential. */
+  trust_ifaces: string[];
+  /** no_local_bypass requires a credential even from 127.0.0.1 (TCP tunnels). */
+  no_local_bypass: boolean;
   has_token: boolean;
   pass_token?: string;
 }
@@ -155,6 +177,27 @@ export function saveConfig(config: Config): Promise<StatusResponse> {
   return call<StatusResponse>("api/config", {
     method: "POST",
     body: JSON.stringify(config),
+  });
+}
+
+/** newToken mints a credential; the server owns the alphabet and the entropy. */
+export async function newToken(): Promise<string> {
+  const body = await call<{ ok: boolean; token: string }>("api/token", {
+    method: "POST",
+    body: "{}",
+  });
+  return body.token;
+}
+
+/** shareLinks mints URLs that stop working after ttlHours. */
+export function shareLinks(ttlHours: number): Promise<{
+  ok: boolean;
+  expires: string;
+  urls: ShareLink[];
+}> {
+  return call("api/share", {
+    method: "POST",
+    body: JSON.stringify({ ttl_hours: ttlHours }),
   });
 }
 

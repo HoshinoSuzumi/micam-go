@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"micam/internal/auth"
 	"micam/internal/hls"
 	"micam/internal/miss"
 	"micam/internal/sink"
@@ -59,6 +60,12 @@ type Config struct {
 	AudioPath string
 	// AudioRate is the sample rate of the camera's G.711 audio.
 	AudioRate int
+
+	// Auth decides who may watch. Nil means no access control at all.
+	Auth *auth.Policy
+	// PublicMetrics also leaves /metrics and / unauthenticated. /healthz is
+	// always open, because a health check that needs a password is always down.
+	PublicMetrics bool
 }
 
 // Server fans one stream out to any number of HTTP viewers.
@@ -68,6 +75,7 @@ type Config struct {
 type Server struct {
 	cfg      Config
 	log      *slog.Logger
+	auth     *auth.Policy
 	listener net.Listener
 	http     *http.Server
 
@@ -115,8 +123,13 @@ func New(cfg Config, log *slog.Logger) *Server {
 		// G.711 is an 8 kHz codec; anything else would be an unusual camera.
 		cfg.AudioRate = 8000
 	}
+	policy := cfg.Auth
+	if policy == nil {
+		policy = auth.Disabled()
+	}
 	return &Server{
 		cfg:          cfg,
+		auth:         policy,
 		log:          log,
 		viewers:      make(map[*viewer]struct{}),
 		audioViewers: make(map[*audioViewer]struct{}),
@@ -152,8 +165,17 @@ func (s *Server) Start() error {
 		mux.HandleFunc(s.cfg.AudioPath, s.handleAudio)
 	}
 
+	handler := http.Handler(mux)
+	if s.auth.Enabled() {
+		handler = s.auth.Handler(mux, s.skipAuth)
+	}
+
 	s.http = &http.Server{
-		Handler: mux,
+		Handler: handler,
+		// The local socket address is recorded so "trust the tailscale interface"
+		// can be decided from which interface accepted the connection, which no
+		// client can claim for itself.
+		ConnContext: auth.ConnContext,
 		// A stream never ends on its own, so the write timeout must stay disabled.
 		WriteTimeout: 0,
 	}
@@ -399,6 +421,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		newSink:      factory,
 		log:          s.log,
 		remote:       clientIP(r),
+		auth:         identityLabel(r),
 		since:        time.Now(),
 	}
 	s.add(v)
@@ -448,7 +471,17 @@ func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body := s.seg.Playlist(s.hlsMediaBase())
+	// The credential has to travel with the playlist: a <video> element cannot
+	// set a header, and Safari resolves the relative segment URIs itself.
+	query := ""
+	if id, ok := auth.FromContext(r.Context()); ok {
+		if q := id.Query(); q != "" {
+			query = "?" + q
+		}
+		s.setSessionCookie(w, r, id)
+	}
+
+	body := s.seg.PlaylistWith(s.hlsMediaBase(), query)
 	s.noteHLS(r, len(body))
 
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
@@ -568,6 +601,7 @@ type viewer struct {
 	started      bool
 	resyncs      int
 	remote       string
+	auth         string
 	since        time.Time
 	bytes        atomic.Int64
 	log          *slog.Logger

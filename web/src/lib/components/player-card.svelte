@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import type { StreamURL } from "$lib/api";
+  import type { AuthToken, StreamURL } from "$lib/api";
   import { copyText } from "$lib/clipboard";
   import { Button, Card, CardContent, CardHeader, CardTitle, Select } from "./ui";
 
@@ -9,12 +9,20 @@
     endpoints = [],
     hlsEnabled = false,
     audioEnabled = false,
+    tokens = [],
   }: {
     url: string;
     endpoints?: StreamURL[];
     hlsEnabled?: boolean;
     audioEnabled?: boolean;
+    /** Stream credentials; the first one is used unless another is picked. */
+    tokens?: AuthToken[];
   } = $props();
+
+  // The select yields strings; the index is converted so the lookup stays
+  // obvious and survives a token being deleted.
+  let tokenIndex = $state(0);
+  const token = $derived(tokens[Number(tokenIndex)]?.secret ?? "");
 
   // Which row was copied last, so the feedback lands where the click did.
   let copied = $state<string | null>(null);
@@ -61,20 +69,35 @@
     }
   });
 
+  // mpv, VLC and ffmpeg all understand user:password@ and turn it into Basic
+  // auth, which is the form that needs no quoting and no flags.
+  function withUserinfo(value: string, secret: string): string {
+    if (!secret) return value;
+    // Insert after the scheme so an https stream keeps working.
+    return value.replace(/^(https?:\/\/)/, `$1micam:${secret}@`);
+  }
+
+  const playable = $derived(withUserinfo(active, token));
+
   const commands = $derived([
-    { id: "mpv", text: `mpv --hwdec=auto ${active}` },
-    { id: "vlc", text: `vlc ${active}` },
-    { id: "ffplay", text: `ffplay -fflags nobuffer ${active}` },
+    { id: "mpv", text: `mpv --hwdec=auto ${playable}` },
+    { id: "vlc", text: `vlc ${playable}` },
+    { id: "ffplay", text: `ffplay -fflags nobuffer ${playable}` },
   ]);
 
   // The playlist lives next to the stream: same host, same port, different
   // path. Deriving it from the selected address keeps one selector in charge of
   // both, so the two can never point at different interfaces.
-  const hls = $derived(active.replace(/\.ts$/, ".m3u8"));
+  // A <video> element cannot set a header, so the playlist carries the
+  // credential in its query string and hands it to every segment it names.
+  const hls = $derived.by(() => {
+    const base = active.replace(/\.ts$/, ".m3u8");
+    return token ? `${base}?token=${encodeURIComponent(token)}` : base;
+  });
 
   // Same for the sound: a separate endpoint, because neither MPEG-TS nor the
   // HLS container can carry the camera's G.711.
-  const audio = $derived(active.replace(/\.ts$/, ".wav"));
+  const audio = $derived(withUserinfo(active.replace(/\.ts$/, ".wav"), token));
 
   async function copy(id: string, text: string) {
     const ok = await copyText(text);
@@ -93,15 +116,32 @@
   <CardHeader>
     <CardTitle>播放地址</CardTitle>
     <p class="text-xs text-muted-foreground">
-      没有鉴权，只适合可信网段；外网请走 Tailscale 或带认证的反向代理。
+      {#if tokens.length > 0}
+        地址里已经带上 token；mpv / VLC / ffmpeg 会把它当作 Basic 认证。命令行里含密码，注意别粘到公开的地方。
+      {:else}
+        没有鉴权，只适合可信网段；外网请走 Tailscale，或在「访问控制」里加一个 token。
+      {/if}
     </p>
   </CardHeader>
 
   <CardContent class="space-y-4">
+    {#if tokens.length > 1}
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="text-xs text-muted-foreground">用哪个 token</span>
+        <div class="w-44">
+          <Select bind:value={tokenIndex} aria-label="地址里使用哪个 token">
+            {#each tokens as item, index (index)}
+              <option value={index}>{item.label || `token-${index + 1}`}</option>
+            {/each}
+          </Select>
+        </div>
+      </div>
+    {/if}
+
     <div class="flex flex-wrap gap-2">
       <code
         class="min-w-0 flex-1 basis-64 truncate rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs"
-        title={active}>{active}</code
+        title={playable}>{playable}</code
       >
 
       {#if options.length > 1}
@@ -118,7 +158,7 @@
         variant="outline"
         size="sm"
         class="h-9 shrink-0"
-        onclick={() => copy("url", active)}
+        onclick={() => copy("url", playable)}
       >
         {copied === "url" ? "已复制" : failed === "url" ? "复制失败" : "复制"}
       </Button>

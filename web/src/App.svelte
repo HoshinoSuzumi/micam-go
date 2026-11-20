@@ -2,6 +2,7 @@
   import { control, getStatus, type StatusResponse } from "$lib/api";
   import { stateLabel, stateTone } from "$lib/format";
   import { Badge, Button } from "$lib/components/ui";
+  import AuthCard from "$lib/components/auth-card.svelte";
   import ConfigCard from "$lib/components/config-card.svelte";
   import ConnectionsCard from "$lib/components/connections-card.svelte";
   import LogCard from "$lib/components/log-card.svelte";
@@ -94,6 +95,14 @@
     </div>
   {/if}
 
+  {#if data && data.app.running && (data.config.tokens ?? []).length === 0 && !(data.app.bind ?? "").startsWith("127.")}
+    <div
+      class="rounded-lg border border-amber-500/30 bg-amber-500/8 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
+    >
+      当前没有访问控制：任何能连到 {data.app.bind ?? "8554"} 的客户端都能看画面。内网可以接受，接了 Tailscale 或做过端口映射就建议加一个 token。
+    </div>
+  {/if}
+
   {#if data && !data.configured && !data.app.running}
     <div class="rounded-lg border border-amber-500/30 bg-amber-500/8 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
       还没配置完：在下面填好数字 userId、passToken 和摄像头 DID，保存后会自动启动。
@@ -107,10 +116,18 @@
       endpoints={data.app.urls ?? []}
       hlsEnabled={data.config.hls}
       audioEnabled={data.config.audio}
+      tokens={data.config.tokens ?? []}
     />
     <ConnectionsCard connections={data.app.connections ?? []} />
 
 <ConfigCard
+      config={data.config}
+      onSaved={(result) => {
+        data = result;
+        if (!result.ok && result.app.error) error = result.app.error;
+      }}
+    />
+    <AuthCard
       config={data.config}
       onSaved={(result) => {
         data = result;

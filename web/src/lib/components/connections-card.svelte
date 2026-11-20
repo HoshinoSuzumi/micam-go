@@ -54,6 +54,9 @@
             <tr class="border-b text-left">
               <th class="py-2 pr-3 font-medium">类型</th>
               <th class="py-2 pr-3 font-medium">来源</th>
+              {#if connections.some((c) => c.auth)}
+                <th class="py-2 pr-3 font-medium">鉴权</th>
+              {/if}
               <th class="py-2 pr-3 font-medium">已接收</th>
               <th class="py-2 pr-3 font-medium">看了多久</th>
               <th class="py-2 font-medium whitespace-nowrap">最近请求</th>
@@ -66,6 +69,9 @@
                   {kindLabel[c.kind] ?? c.kind}
                 </td>
                 <td class="py-2 pr-3">{c.remote}</td>
+                {#if connections.some((item) => item.auth)}
+                  <td class="py-2 pr-3 text-muted-foreground">{c.auth ?? "—"}</td>
+                {/if}
                 <td class="py-2 pr-3">{formatBytes(c.bytes)}</td>
                 <td class="py-2 pr-3">{formatDuration(watching(c))}</td>
                 <td class="py-2 text-muted-foreground">

@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
+
+	"micam/internal/auth"
 )
 
 // Config is what a user configures. It is the same set of values the wizard
@@ -36,6 +39,20 @@ type Config struct {
 	Audio     bool `json:"audio"`
 	AudioRate int  `json:"audio_rate"`
 
+	// Access control for the stream itself. The tokens are stream credentials,
+	// not the Mi account: they are revocable per device and worth far less than a
+	// passToken, which is why the UI may show them.
+	Tokens      []AuthToken `json:"tokens"`
+	AllowCIDR   []string    `json:"allow_cidr"`
+	TrustIfaces []string    `json:"trust_ifaces"`
+	// NoLocalBypass requires a credential even from 127.0.0.1.
+	//
+	// It exists for one deployment: a TCP tunnel (frp type=tcp) on the same host.
+	// The tunnel's connections arrive from loopback and carry no
+	// X-Forwarded-For, so they are indistinguishable from a local player, and the
+	// free pass would silently turn access control off for the whole internet.
+	NoLocalBypass bool `json:"no_local_bypass"`
+
 	// HasToken reports whether a passToken is stored. The token itself is never
 	// sent to a browser.
 	HasToken bool `json:"has_token"`
@@ -43,6 +60,13 @@ type Config struct {
 	// PassToken is input only: set it to replace the stored token, leave it empty
 	// to keep the current one.
 	PassToken string `json:"pass_token,omitempty"`
+}
+
+// AuthToken is one stream credential. Label names the device so it can be
+// deleted without rotating everything else.
+type AuthToken struct {
+	Label  string `json:"label"`
+	Secret string `json:"secret"`
 }
 
 // Defaults returns the values used when nothing is configured yet.
@@ -57,6 +81,11 @@ func Defaults() Config {
 		HLSWindow: 6,
 		Audio:     false,
 		AudioRate: 8000,
+
+		// The tailnet is already authenticated by WireGuard and its ACLs, so a
+		// second password there is noise. This is matched against the local
+		// interface, so a carrier NAT address in the same range gains nothing.
+		TrustIfaces: []string{"tailscale0"},
 	}
 }
 
@@ -126,7 +155,60 @@ func (c *Config) set(key, value string) {
 		}
 	case "MICAM_AUDIO_RATE":
 		c.AudioRate = atoiOr(value, c.AudioRate)
+	case "MICAM_TOKEN":
+		c.Tokens = parseTokens(value)
+	case "MICAM_ALLOW_CIDR":
+		c.AllowCIDR = splitCSV(value)
+	case "MICAM_TRUST_IFACE":
+		c.TrustIfaces = splitCSV(value)
+	case "MICAM_NO_LOCAL_BYPASS":
+		if parsed, err := strconv.ParseBool(value); err == nil {
+			c.NoLocalBypass = parsed
+		}
 	}
+}
+
+// parseTokens reads "客厅=secret,手机=other" back into entries.
+//
+// The label is optional: a bare value is still a usable credential, which keeps a
+// hand-written MICAM_TOKEN working.
+func parseTokens(value string) []AuthToken {
+	var out []AuthToken
+	for _, item := range splitCSV(value) {
+		label, secret, hasLabel := strings.Cut(item, "=")
+		if !hasLabel {
+			label, secret = "", item
+		}
+		label, secret = strings.TrimSpace(label), strings.TrimSpace(secret)
+		if secret == "" {
+			continue
+		}
+		if label == "" {
+			label = fmt.Sprintf("token-%d", len(out)+1)
+		}
+		out = append(out, AuthToken{Label: label, Secret: secret})
+	}
+	return out
+}
+
+// encodeTokens is the inverse of parseTokens.
+func encodeTokens(tokens []AuthToken) string {
+	parts := make([]string, 0, len(tokens))
+	for _, t := range tokens {
+		parts = append(parts, t.Label+"="+t.Secret)
+	}
+	return strings.Join(parts, ",")
+}
+
+// splitCSV splits a comma-separated list and drops empty items.
+func splitCSV(value string) []string {
+	var out []string
+	for _, part := range strings.Split(value, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func atoiOr(value string, fallback int) int {
@@ -176,6 +258,11 @@ func (c Config) Encode() []byte {
 	fmt.Fprintf(&b, "MICAM_HLS_WINDOW=%s\n", quote(strconv.Itoa(c.HLSWindow)))
 	fmt.Fprintf(&b, "MICAM_AUDIO=%s\n", quote(strconv.FormatBool(c.Audio)))
 	fmt.Fprintf(&b, "MICAM_AUDIO_RATE=%s\n", quote(strconv.Itoa(c.AudioRate)))
+	// 访问控制。token 用 label=secret 的逗号分隔形式，二者都不允许包含逗号或等号。
+	fmt.Fprintf(&b, "MICAM_TOKEN=%s\n", quote(encodeTokens(c.Tokens)))
+	fmt.Fprintf(&b, "MICAM_ALLOW_CIDR=%s\n", quote(strings.Join(c.AllowCIDR, ",")))
+	fmt.Fprintf(&b, "MICAM_TRUST_IFACE=%s\n", quote(strings.Join(c.TrustIfaces, ",")))
+	fmt.Fprintf(&b, "MICAM_NO_LOCAL_BYPASS=%s\n", quote(strconv.FormatBool(c.NoLocalBypass)))
 	return []byte(b.String())
 }
 
@@ -219,6 +306,29 @@ func (c *Config) Validate() error {
 	if c.AudioRate != 0 && (c.AudioRate < 1000 || c.AudioRate > 48000) {
 		return fmt.Errorf("audio_rate must be 1000..48000, got %d", c.AudioRate)
 	}
+	for i := range c.Tokens {
+		c.Tokens[i].Label = strings.TrimSpace(c.Tokens[i].Label)
+		c.Tokens[i].Secret = strings.TrimSpace(c.Tokens[i].Secret)
+		t := c.Tokens[i]
+		if t.Label == "" {
+			c.Tokens[i].Label = fmt.Sprintf("token-%d", i+1)
+		}
+		if len(t.Secret) < 16 {
+			return fmt.Errorf("token %q is shorter than 16 characters; generate one instead", t.Label)
+		}
+		if !auth.ValidToken(t.Secret) {
+			return fmt.Errorf("token %q 只能包含 A-Z a-z 0-9 - _（base64url），否则放进 URL 时会被转义坏掉；用「生成新 token」", t.Label)
+		}
+		if strings.ContainsAny(c.Tokens[i].Label, ",") || hasControl(c.Tokens[i].Label) {
+			return fmt.Errorf("token label %q contains a comma or a control character", c.Tokens[i].Label)
+		}
+	}
+	for _, cidr := range c.AllowCIDR {
+		if _, err := netip.ParsePrefix(strings.TrimSpace(cidr)); err != nil {
+			return fmt.Errorf("allow_cidr %q is not a network in CIDR form", cidr)
+		}
+	}
+
 	if c.DID != "" && !digits(c.DID) {
 		return errors.New("did must be digits only")
 	}

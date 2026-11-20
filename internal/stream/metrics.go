@@ -70,6 +70,19 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&b, "micam_viewers{kind=%q} %d\n", kind, kinds[kind])
 	}
 
+	authOn := 0.0
+	if s.auth.Enabled() {
+		authOn = 1
+	}
+	b.gauge("micam_auth_enabled", "1 when the stream requires a credential.", authOn)
+	if s.auth.Enabled() {
+		b.header("micam_auth_failures_total", "Rejected requests, by reason.", "counter")
+		counts := s.auth.FailureCounts()
+		for _, reason := range []string{"expired", "invalid", "missing", "rate_limited"} {
+			fmt.Fprintf(&b, "micam_auth_failures_total{reason=%q} %d\n", reason, counts[reason])
+		}
+	}
+
 	b.counter("micam_frames_published_total", "Video frames fanned out to players and HLS.", s.framesTotal.Load())
 	b.counter("micam_audio_frames_published_total", "Audio frames fanned out.", s.audioTotal.Load())
 	b.counter("micam_viewer_bytes_total", "Bytes written to players.", s.bytesTotal.Load())

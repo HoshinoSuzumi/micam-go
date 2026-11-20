@@ -43,6 +43,11 @@ fnpack 的 docker 模板解决的是"应用由多个容器组成、需要受控�
 
 界面源码在 `web/`（Svelte 5 + Tailwind），产物不提交，构建时复制进包里。
 
+「访问控制」那一段写的是 `micam.env` 里的 `MICAM_TOKEN` / `MICAM_ALLOW_CIDR` /
+`MICAM_TRUST_IFACE`，和命令行参数一一对应：界面保存后由 `cmd/main` 重新 source
+再重启守护进程，所以两边永远看的是同一份配置。注意**向导（应用设置）不会覆盖这三项**，
+它只写连接参数——否则改一次清晰度就会把刚配好的 token 删掉。
+
 ## 构建
 
 ```sh

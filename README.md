@@ -168,6 +168,16 @@ make fpk                        # 出 amd64 与 arm64 两个包
 | `--relogin` | off | 丢弃缓存会话重新登录 |
 | `--dump` | — | 把裸码流写到文件，不对外提供 HTTP（配合 `--dump-seconds`） |
 | `--status-file` | — | 周期性写出状态 JSON，供管理界面读取 |
+| `--token` | — | 需要凭据才能看；可重复，`label=secret` 给设备起名 |
+| `--token-file` | — | 一行一个 token，不让口令进 argv |
+| `--allow-cidr` | — | 免鉴权网段，可重复 |
+| `--trust-iface` | `tailscale0` | 免鉴权网卡；写空字符串表示不信任任何网卡 |
+| `--trusted-proxy` | — | 允许声明 `X-Forwarded-For` 的反代地址，可重复 |
+| `--auth-fail-limit` | `20` | 每个 IP 每分钟的失败上限，超过返回 429 |
+| `--auth-realm` | `micam` | Basic 认证提示里的 realm |
+| `--share-ttl` | `12h` | 分享链接的有效期 |
+| `--public-metrics` | 关 | 让 `/metrics` 和 `/` 也免鉴权 |
+| `--no-local-bypass` | 关 | 本机来的请求同样要求凭据 |
 | `--verbose` | off | 逐包打印 PPPP |
 
 环境变量与参数同名（`MICAM_` 前缀），容器里改不了命令行时就用它。`MICAM_PASS_TOKEN_FILE`
@@ -189,9 +199,12 @@ make fpk                        # 出 amd64 与 arm64 两个包
 | `/cam.ts` | MPEG-TS，给 mpv / VLC / ffmpeg |
 | `/cam.m3u8` | HLS（fMP4 + Opus），Safari 和 iOS 只能播这个 |
 | `/cam.wav` | G.711 音频，`--audio` 打开后才有 |
-| `/healthz` | 200 表示正常：没人看算正常，有人看时要求 15 秒内有过帧，否则 503 |
-| `/metrics` | Prometheus 文本格式：状态、观众数、帧数与字节数、重同步、HLS 分片与丢弃 |
-| `/` | 纯文本索引，列出上面这些和当前观众数 |
+| `/healthz` | 200 表示正常：没人看算正常，有人看时要求 15 秒内有过帧，否则 503；始终免鉴权 |
+| `/metrics` | Prometheus 文本格式：状态、观众数、帧数与字节数、重同步、HLS 分片与丢弃；默认需要凭据（`--public-metrics` 可放开） |
+| `/` | 纯文本索引，列出上面这些和当前观众数；同样受访问控制保护 |
+
+配了 `--token` 之后，上面除 `/healthz` 之外都需要凭据；抓取端用
+`basic_auth`（用户名随意，口令填 token）或 `authorization` 即可。
 
 `/healthz` 适合放进 Docker healthcheck 或 NAS 的监控，`/` 适合直接用浏览器打开看一眼。
 
@@ -205,6 +218,84 @@ micam_last_frame_age_seconds 0.04
 ```
 
 `micam_last_frame_age_seconds` 是最好用的一条：有人看却持续增长，就是流断了。
+
+## 访问控制
+
+默认没有鉴权：能连上 8554 的人就能看画面、听声音，还能读到观众列表。配一个 token
+之后，除了下面三种明显可信的来源，其余请求都要带凭据。
+
+### 免鉴权的三种来源
+
+1. 本机（`127.0.0.1`）；
+2. 从 `--trust-iface` 指定的网卡进来的连接，默认 `tailscale0`。判断依据是**本机接受
+   连接的那块网卡的地址**，不是客户端声称的地址 —— 伪造源地址没有用。Tailscale 已经
+   由 WireGuard 密钥和 ACL 认证过，再要一次口令是多余的；
+3. `--allow-cidr` 里的网段。
+
+注意 `100.64.0.0/10` 是 CGNAT 段，运营商给手机用户的地址也在里面，所以不建议把整段
+写进 `--allow-cidr`；信任网卡没有这个问题。
+
+服务放在反向代理后面时，代理会带 `X-Forwarded-For`。此时本机不再享受豁免 —— 否则一台
+在本机上的反代会把鉴权整个关掉。要采信这个头，把反代地址写进 `--trusted-proxy`。
+
+### 内网穿透
+
+穿透会让请求的来源变成穿透客户端，这一条直接决定鉴权还在不在：
+
+- **TCP 转发**（frp `type = tcp`、`ssh -R`）跑在同一台主机上：对端是 `127.0.0.1`，而且不带
+  `X-Forwarded-For`，和本机播放器完全无法区分 —— 本机豁免会生效，等于把鉴权关掉了。这种
+  部署必须开 `--no-local-bypass`（界面里的「本机也要求凭据」）。代价是本机播放器也要带
+  token；`--allow-cidr 127.0.0.1/32` 补救不了，穿透流量会一起被放行。
+- **HTTP 代理 / vhost**（frp `type = http`、nginx）：通常会带 `X-Forwarded-For`，本机豁免
+  自动失效，公网来访一律要求 token。
+- **穿透客户端跑在另一台机器或独立容器里**最省事：对端不再是本机地址，本机免鉴权照常，
+  穿透流量按 token 判定。
+
+签名链接与地址无关，所以穿透域名可以直接替换链接里的 host，不用重新签发。
+
+### 客户端怎么带凭据
+
+| 客户端 | 用法 |
+|---|---|
+| mpv / VLC / ffmpeg / ffplay | `http://micam:<token>@<地址>:8554/cam.ts` |
+| curl / 脚本 | `curl -u micam:<token> …`，或 `-H 'Authorization: Bearer <token>'` |
+| Safari / iPhone（HLS） | `http://<地址>:8554/cam.m3u8?token=<token>` |
+| Home Assistant、Prometheus | Basic `authentication: basic` / `authorization: bearer` |
+| 老电视、DLNA、录像机 | 放进 `--allow-cidr` |
+
+HLS 是唯一需要额外处理的地方：`<video>` 不能设请求头，Safari 还会自己解析分片地址。
+所以 playlist 会把凭据写进每一个分片 URI，同时下发 `micam_auth` cookie 作为兜底。
+ffmpeg 默认不保存 cookie，只能靠 URL 里的凭据 —— 两条路都要有，不是二选一。
+
+token 只允许 `A-Z a-z 0-9 - _`。这不是洁癖：只有这样它才能原样出现在 query、
+userinfo、shell 命令和配置文件里而不需要任何转义。管理界面里的「生成新 token」就是
+按这个字母表出的。
+
+### 分享链接
+
+给访客的链接带过期时间：
+
+```
+http://<地址>:8554/cam.m3u8?exp=1795162707&sig=6kVwTFVXb9pdYz7KCQdcuQ
+```
+
+签名覆盖 `exp` 和一个固定 scope，所以同一条链接对 playlist 和它列出的每个分片都有效。
+换掉签名密钥（删掉数据目录里的 `share.key`，或重跑一次）等于一次性作废所有旧链接。
+
+链接里的凭据会进浏览器历史、代理日志和聊天记录，过期时间就是它的价值：过期之后，那条
+被转发出去的消息就自动失效了。
+
+### 失败与限流
+
+凭据错、缺凭据返回 401 并带 `WWW-Authenticate`（播放器据此弹口令框、重试）；同一个 IP
+一分钟内错太多次返回 429 和 `Retry-After`。失败次数按原因记在
+`micam_auth_failures_total{reason="invalid"|"missing"|"expired"|"rate_limited"}`。
+
+### 明文 HTTP 的边界
+
+Basic 认证在明文 HTTP 上就是明文口令。局域网可以接受；公网请走 Tailscale（已加密），
+或者加一层 TLS 反代。管理界面里的内嵌播放器同理：管理页一旦上了 HTTPS，播放器再去连
+`http://` 的流会被浏览器当混合内容拦掉。
 
 ## 局域网直连
 

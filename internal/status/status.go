@@ -47,10 +47,13 @@ type StreamURL struct {
 // a connection open, while an HLS player only appears as a series of requests, so
 // its entry is inferred from the last one seen.
 type Connection struct {
-	Kind   string    `json:"kind"` // ts, hls or wav
-	Remote string    `json:"remote"`
-	Since  time.Time `json:"since"`
-	Bytes  int64     `json:"bytes"`
+	Kind   string `json:"kind"` // ts, hls or wav
+	Remote string `json:"remote"`
+	// Auth is how this player was let in: "loopback", "cidr:10.0.0.0/8",
+	// "token:客厅". Empty when access control is off.
+	Auth  string    `json:"auth,omitempty"`
+	Since time.Time `json:"since"`
+	Bytes int64     `json:"bytes"`
 	// Requests and Last matter for HLS, where "still here" means "asked for
 	// something recently".
 	Requests int64     `json:"requests,omitempty"`

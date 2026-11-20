@@ -165,6 +165,18 @@ func (s *Server) handle() reply {
 			return s.methodNotAllowed(method, route)
 		}
 		return s.control()
+
+	case "/api/share":
+		if method != http.MethodPost {
+			return s.methodNotAllowed(method, route)
+		}
+		return s.share()
+
+	case "/api/token":
+		if method != http.MethodPost {
+			return s.methodNotAllowed(method, route)
+		}
+		return s.newToken()
 	}
 
 	return s.fail(http.StatusNotFound, fmt.Errorf("unknown route %q", route))

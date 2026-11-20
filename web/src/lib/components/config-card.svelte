@@ -99,7 +99,10 @@
     error = "";
     message = "";
     try {
+      // Start from the stored config so the fields this card does not own
+      // (access control) are carried through unchanged.
       const result = await saveConfig({
+        ...config,
         ...form,
         hls: form.hls === "on",
         audio: form.audio === "on",

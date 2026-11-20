@@ -445,6 +445,16 @@ func (s *Segmenter) InitName() string {
 // "seg3.m4s" tells the player to fetch /seg3.m4s, because relative URIs resolve
 // against the playlist's directory. Passing "cam/" makes them /cam/seg3.m4s.
 func (s *Segmenter) Playlist(base string) []byte {
+	return s.PlaylistWith(base, "")
+}
+
+// PlaylistWith appends a query string to every URI it emits.
+//
+// This is how access control reaches an Apple player: the playlist is the only
+// thing that can carry a credential into the segment requests, because <video>
+// cannot set a header and Safari resolves the relative URIs itself. query must
+// include the leading "?", or be empty.
+func (s *Segmenter) PlaylistWith(base, query string) []byte {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -462,10 +472,10 @@ func (s *Segmenter) Playlist(base string) []byte {
 		fmt.Fprintf(&b, "#EXT-X-MEDIA-SEQUENCE:%d\n", s.ring[0].Seq)
 	}
 	if s.initName != "" {
-		fmt.Fprintf(&b, "#EXT-X-MAP:URI=\"%s%s\"\n", base, s.initName)
+		fmt.Fprintf(&b, "#EXT-X-MAP:URI=\"%s%s%s\"\n", base, s.initName, query)
 	}
 	for _, seg := range s.ring {
-		fmt.Fprintf(&b, "#EXTINF:%.3f,\n%s%s\n", seg.Duration.Seconds(), base, seg.Name)
+		fmt.Fprintf(&b, "#EXTINF:%.3f,\n%s%s%s\n", seg.Duration.Seconds(), base, seg.Name, query)
 	}
 
 	return b.Bytes()

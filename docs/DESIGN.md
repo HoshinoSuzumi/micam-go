@@ -249,6 +249,21 @@ func run(ctx context.Context, opts cli.Options) error {
 
 ---
 
+### 3.8 访问控制
+
+判定放在进程内，不是反向代理：HLS 的 playlist 是本进程生成的，只有它能把握手凭据写进
+分片 URI，而 Safari 的 `<video>` 既不能设请求头，也不会保留查询串——代理不改响应体，
+做不了这件事。
+
+`auth.Policy` 收在 `http.Server` 外面一层，`ConnContext` 记录**本机**接受连接的地
+址，于是"信任 tailscale 网卡"可以按接口判定：客户端无法声称自己是从 VPN 进来的。
+判定顺序是 位置（loopback / 网卡 / CIDR）→ header（Bearer / Basic）→ query → cookie，
+最后才是 401；这样不会因为一个过期 cookie 拒绝一个带着新 token 的请求。
+
+凭据要求是 base64url，理由不是洁癖：同一个字符串要原样穿过 query、userinfo、shell 和
+配置文件。签名链接的 scope 是常量而非路径，因为一条链接必须同时覆盖 playlist 和它
+列出的分片。
+
 ## 4. 并发拓扑
 
 ```

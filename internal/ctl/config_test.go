@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -20,6 +21,12 @@ func TestConfigRoundTrip(t *testing.T) {
 	want.LAN = "only"
 	want.Reconnect = 9
 	want.IdleStop = 5
+	want.Tokens = []AuthToken{
+		{Label: "客厅电视", Secret: "IXk3aaaaaaaaaaaaaaaaaaaaaaaa"},
+		{Label: "手机", Secret: "JZK3bbbbbbbbbbbbbbbbbbbbbbbb"},
+	}
+	want.AllowCIDR = []string{"192.168.0.0/24"}
+	want.TrustIfaces = []string{"tailscale0", "wg0"}
 
 	if err := os.WriteFile(path, want.Encode(), 0o600); err != nil {
 		t.Fatal(err)
@@ -28,7 +35,7 @@ func TestConfigRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("round trip = %+v, want %+v", got, want)
 	}
 }
@@ -44,12 +51,19 @@ func TestConfigIsShellSafe(t *testing.T) {
 	cfg.User = `we'ird $HOME "name"`
 	cfg.UserID = "2255231260"
 	cfg.DID = "1221672311"
+	// The access-control lines are `label=secret` lists inside single quotes: the
+	// `=` must not be read as a command by the shell, and the token must survive
+	// as one value.
+	cfg.Tokens = []AuthToken{{Label: "客厅 电视", Secret: "{{SECRET_zghbw7sa}}"}}
+	cfg.AllowCIDR = []string{"192.168.0.0/24"}
+	cfg.TrustIfaces = []string{"tailscale0"}
+	cfg.NoLocalBypass = true
 
 	if err := os.WriteFile(path, cfg.Encode(), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	script := `. "$1"; printf '%s\n%s' "$MICAM_USER" "$MICAM_DID"`
+	script := `. "$1"; printf '%s\n%s\n%s\n%s' "$MICAM_USER" "$MICAM_DID" "$MICAM_TOKEN" "$MICAM_NO_LOCAL_BYPASS"`
 	out, err := exec.Command("sh", "-c", script, "sh", path).Output()
 	if err != nil {
 		t.Fatalf("sourcing the file failed: %v", err)
@@ -61,6 +75,12 @@ func TestConfigIsShellSafe(t *testing.T) {
 	}
 	if lines[1] != cfg.DID {
 		t.Fatalf("MICAM_DID = %q", lines[1])
+	}
+	if lines[2] != "客厅 电视={{SECRET_zghbw7sa}}" {
+		t.Fatalf("MICAM_TOKEN = %q", lines[2])
+	}
+	if lines[3] != "true" {
+		t.Fatalf("MICAM_NO_LOCAL_BYPASS = %q", lines[3])
 	}
 
 	// ...and the same bytes parse back.

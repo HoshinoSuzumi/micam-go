@@ -22,6 +22,7 @@ const hlsSessionTimeout = 20 * time.Second
 // hlsSession is one HLS player, inferred from its requests.
 type hlsSession struct {
 	remote   string
+	auth     string
 	since    time.Time
 	last     time.Time
 	bytes    atomic.Int64
@@ -43,6 +44,7 @@ func (s *Server) noteHLS(r *http.Request, size int) {
 		s.noteViewersLocked()
 	}
 	sess.last = now
+	sess.auth = identityLabel(r)
 	sess.bytes.Add(int64(size))
 	sess.requests.Add(1)
 }
@@ -77,6 +79,7 @@ func (s *Server) ViewersInfo() []status.Connection {
 		out = append(out, status.Connection{
 			Kind:   "ts",
 			Remote: v.remote,
+			Auth:   v.auth,
 			Since:  v.since,
 			Bytes:  v.bytes.Load(),
 		})
@@ -86,6 +89,7 @@ func (s *Server) ViewersInfo() []status.Connection {
 		out = append(out, status.Connection{
 			Kind:   "wav",
 			Remote: v.remote,
+			Auth:   v.auth,
 			Since:  v.since,
 			Bytes:  v.bytes.Load(),
 		})
@@ -101,6 +105,7 @@ func (s *Server) ViewersInfo() []status.Connection {
 		out = append(out, status.Connection{
 			Kind:     "hls",
 			Remote:   sess.remote,
+			Auth:     sess.auth,
 			Since:    sess.since,
 			Bytes:    sess.bytes.Load(),
 			Requests: sess.requests.Load(),

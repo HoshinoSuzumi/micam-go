@@ -4,11 +4,13 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"micam/internal/auth"
 	"micam/internal/creds"
 )
 
@@ -63,6 +65,25 @@ type Options struct {
 	Dump           string
 	DumpSeconds    int
 	StatusFile     string
+
+	// Access control. Tokens are repeatable so one device can be revoked without
+	// rotating the credential every device shares.
+	Tokens      []string
+	TokenFile   string
+	AllowCIDRs  []string
+	TrustIfaces []string
+	// TrustedProxies are the peers whose X-Forwarded-For is believed when
+	// resolving the client address.
+	TrustedProxies []string
+	AuthRealm      string
+	AuthFailLimit  int
+	// NoLocalBypass turns off the free pass for requests from this machine.
+	NoLocalBypass bool
+	PublicMetrics bool
+	// ShareKey is a hex-encoded signing key; empty uses the one in the data
+	// directory, which is created on first use.
+	ShareKey string
+	ShareTTL time.Duration
 }
 
 // Values for --lan.
@@ -137,6 +158,29 @@ func Parse(args []string) (*Options, error) {
 	fs.IntVar(&opts.DumpSeconds, "dump-seconds", 5,
 		"how many seconds to capture when using --dump")
 
+	fs.Var((*stringList)(&opts.Tokens), "token",
+		"require this token to watch; repeatable, and label=secret names it in the viewer list")
+	fs.StringVar(&opts.TokenFile, "token-file", envOr("MICAM_TOKEN_FILE", ""),
+		"file with one token per line, for secrets that should not be in argv")
+	fs.Var((*stringList)(&opts.AllowCIDRs), "allow-cidr",
+		"network that may watch without a credential, e.g. 192.168.0.0/24; repeatable")
+	fs.Var((*stringList)(&opts.TrustIfaces), "trust-iface",
+		"interface whose clients may watch without a credential; empty disables")
+	fs.Var((*stringList)(&opts.TrustedProxies), "trusted-proxy",
+		"peer allowed to declare the client in X-Forwarded-For; repeatable")
+	fs.StringVar(&opts.AuthRealm, "auth-realm", envOr("MICAM_AUTH_REALM", "micam"),
+		"realm offered to players in the Basic auth challenge")
+	fs.IntVar(&opts.AuthFailLimit, "auth-fail-limit", envIntOr("MICAM_AUTH_FAIL_LIMIT", 20),
+		"bad credentials one client may present per minute before it is throttled")
+	fs.BoolVar(&opts.NoLocalBypass, "no-local-bypass", envBoolOr("MICAM_NO_LOCAL_BYPASS", false),
+		"require a credential even from this machine (use when a proxy on this host terminates auth)")
+	fs.BoolVar(&opts.PublicMetrics, "public-metrics", envBoolOr("MICAM_PUBLIC_METRICS", false),
+		"leave /metrics and the index readable without a credential")
+	fs.StringVar(&opts.ShareKey, "share-key", envOr("MICAM_SHARE_KEY", ""),
+		"hex signing key for expiring links (default: share.key in the data directory)")
+	fs.DurationVar(&opts.ShareTTL, "share-ttl", envDurationOr("MICAM_SHARE_TTL", 12*time.Hour),
+		"how long a generated link stays valid")
+
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
@@ -145,6 +189,54 @@ func Parse(args []string) (*Options, error) {
 	}
 
 	opts.ConnectTimeout = time.Duration(timeoutSeconds) * time.Second
+
+	// Repeatable flags also accept a comma-separated value from the environment,
+	// which is how the container and the fnOS package pass their settings. The
+	// distinction between "unset" and "set to empty" matters: an empty
+	// MICAM_TRUST_IFACE means "trust no interface".
+	seen := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { seen[f.Name] = true })
+
+	if !seen["token"] {
+		if v, ok := os.LookupEnv("MICAM_TOKEN"); ok {
+			opts.Tokens = splitList(v)
+		}
+	}
+	if !seen["allow-cidr"] {
+		if v, ok := os.LookupEnv("MICAM_ALLOW_CIDR"); ok {
+			opts.AllowCIDRs = splitList(v)
+		}
+	}
+	if !seen["trusted-proxy"] {
+		if v, ok := os.LookupEnv("MICAM_TRUSTED_PROXY"); ok {
+			opts.TrustedProxies = splitList(v)
+		}
+	}
+	if !seen["trust-iface"] {
+		if v, ok := os.LookupEnv("MICAM_TRUST_IFACE"); ok {
+			opts.TrustIfaces = splitList(v)
+		} else {
+			// A tailnet is already authenticated by WireGuard and its ACLs, so
+			// asking for a second password there is noise. The address is matched
+			// against the local interface, not a CIDR, so a carrier NAT address
+			// that happens to be in 100.64/10 gains nothing.
+			opts.TrustIfaces = []string{"tailscale0"}
+		}
+	}
+
+	if opts.TokenFile != "" {
+		raw, err := os.ReadFile(opts.TokenFile)
+		if err != nil {
+			return nil, fmt.Errorf("cannot read token file: %w", err)
+		}
+		for _, line := range strings.Split(string(raw), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			opts.Tokens = append(opts.Tokens, line)
+		}
+	}
 
 	if file := os.Getenv("MICAM_PASS_TOKEN_FILE"); file != "" && opts.PassToken == "" {
 		raw, err := os.ReadFile(file)
@@ -174,6 +266,33 @@ func Parse(args []string) (*Options, error) {
 	if opts.Reconnect < 0 {
 		return nil, fmt.Errorf("reconnect must be >= 0, got %d", opts.Reconnect)
 	}
+	for _, token := range opts.Tokens {
+		_, secret, hasLabel := strings.Cut(token, "=")
+		if !hasLabel {
+			secret = token
+		}
+		if secret = strings.TrimSpace(secret); secret == "" {
+			return nil, fmt.Errorf("token %q has an empty secret", token)
+		}
+		if !auth.ValidToken(secret) {
+			return nil, fmt.Errorf("token %q must be base64url (A-Z a-z 0-9 - _): "+
+				"it has to travel through a URL unescaped", token)
+		}
+	}
+	for _, cidr := range append(append([]string{}, opts.AllowCIDRs...), opts.TrustedProxies...) {
+		if _, err := netip.ParsePrefix(strings.TrimSpace(cidr)); err != nil {
+			return nil, fmt.Errorf("%q is not a network in CIDR form", cidr)
+		}
+	}
+	if opts.AuthFailLimit < 0 || opts.AuthFailLimit > 10000 {
+		return nil, fmt.Errorf("auth-fail-limit must be 0..10000, got %d", opts.AuthFailLimit)
+	}
+	if opts.ShareTTL < 5*time.Minute || opts.ShareTTL > 30*24*time.Hour {
+		return nil, fmt.Errorf("share-ttl must be 5m..720h, got %s", opts.ShareTTL)
+	}
+	if strings.ContainsAny(opts.AuthRealm, "\"\r\n") {
+		return nil, fmt.Errorf("auth-realm must not contain quotes or newlines")
+	}
 	if opts.IdleStop < 0 || opts.IdleStop > 1440 {
 		return nil, fmt.Errorf("idle-stop must be 0..1440 minutes, got %d", opts.IdleStop)
 	}
@@ -202,6 +321,40 @@ func (o *Options) Apply(c *creds.Credentials) {
 	if o.PassToken != "" {
 		c.PassToken = strings.TrimSpace(o.PassToken)
 	}
+}
+
+// stringList is a flag that may be repeated, and that also accepts one
+// comma-separated value from the environment.
+type stringList []string
+
+func (l *stringList) String() string { return strings.Join(*l, ",") }
+
+func (l *stringList) Set(value string) error {
+	*l = append(*l, splitList(value)...)
+	return nil
+}
+
+// splitList splits on commas and drops empty items.
+func splitList(value string) []string {
+	out := make([]string, 0, 2)
+	for _, part := range strings.Split(value, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func envDurationOr(key string, fallback time.Duration) time.Duration {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(v)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 func envOr(key, fallback string) string {

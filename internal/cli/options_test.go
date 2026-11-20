@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"os"
 	"testing"
+	"time"
 
 	"micam/internal/creds"
 )
@@ -14,9 +16,31 @@ func clearEnv(t *testing.T) {
 		"MICAM_USER", "MICAM_USER_ID", "MICAM_REGION", "MICAM_PASSWORD",
 		"MICAM_PASS_TOKEN", "MICAM_PASS_TOKEN_FILE", "MICAM_BIND", "MICAM_PORT",
 		"MICAM_QUALITY", "MICAM_RECONNECT",
+		// Access control. These are all "set but empty" - an empty list - which
+		// is a meaningful value for each of them.
+		"MICAM_TOKEN", "MICAM_TOKEN_FILE", "MICAM_ALLOW_CIDR",
+		"MICAM_TRUSTED_PROXY", "MICAM_NO_LOCAL_BYPASS", "MICAM_SHARE_TTL",
 	} {
 		t.Setenv(key, "")
 	}
+	// MICAM_TRUST_IFACE is the exception: "" means "trust no interface", while
+	// unset means "trust the tailnet". The default test needs the second one.
+	unsetEnv(t, "MICAM_TRUST_IFACE")
+}
+
+// unsetEnv removes a variable for the duration of one test, since t.Setenv can
+// only make a variable empty.
+func unsetEnv(t *testing.T, key string) {
+	t.Helper()
+	old, had := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatalf("unsetenv %s: %v", key, err)
+	}
+	t.Cleanup(func() {
+		if had {
+			_ = os.Setenv(key, old)
+		}
+	})
 }
 
 func TestParseDefaults(t *testing.T) {
@@ -193,5 +217,57 @@ func TestApplyFoldsUserIDIntoCredentials(t *testing.T) {
 	}
 	if c.User != "15023365994" || c.Region != "cn" {
 		t.Fatalf("credentials = %+v", c)
+	}
+}
+
+// The fnOS package and the container pass their settings as environment
+// variables, so the merge has to work without any flag on the command line.
+func TestParseAccessControlFromEnv(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("MICAM_TOKEN", "living-room=TV-token-aaaaaaaaaaaa,phone-token-bbbbbbbbbbbb")
+	t.Setenv("MICAM_ALLOW_CIDR", "192.168.0.0/24, 10.0.0.0/8")
+	t.Setenv("MICAM_TRUST_IFACE", "")
+	t.Setenv("MICAM_NO_LOCAL_BYPASS", "true")
+	t.Setenv("MICAM_SHARE_TTL", "1h")
+
+	opts, err := Parse(nil)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(opts.Tokens) != 2 || opts.Tokens[0] != "living-room=TV-token-aaaaaaaaaaaa" {
+		t.Fatalf("tokens = %q", opts.Tokens)
+	}
+	if len(opts.AllowCIDRs) != 2 || opts.AllowCIDRs[1] != "10.0.0.0/8" {
+		t.Fatalf("allow-cidr = %q", opts.AllowCIDRs)
+	}
+	// Set-but-empty is not the same as unset: it means "trust no interface".
+	if len(opts.TrustIfaces) != 0 {
+		t.Fatalf("trust-iface = %q, want none", opts.TrustIfaces)
+	}
+	if !opts.NoLocalBypass {
+		t.Fatal("no-local-bypass was not read from the environment")
+	}
+	if opts.ShareTTL != time.Hour {
+		t.Fatalf("share-ttl = %s", opts.ShareTTL)
+	}
+}
+
+// With nothing configured, a tailnet is trusted by interface: a second password
+// on top of WireGuard and its ACLs is noise.
+func TestParseDefaultsToTailscaleInterface(t *testing.T) {
+	clearEnv(t)
+
+	opts, err := Parse(nil)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(opts.TrustIfaces) != 1 || opts.TrustIfaces[0] != "tailscale0" {
+		t.Fatalf("trust-iface = %q", opts.TrustIfaces)
+	}
+	if len(opts.Tokens) != 0 {
+		t.Fatalf("tokens = %q, want none by default", opts.Tokens)
+	}
+	if opts.ShareTTL != 12*time.Hour {
+		t.Fatalf("share-ttl = %s", opts.ShareTTL)
 	}
 }
