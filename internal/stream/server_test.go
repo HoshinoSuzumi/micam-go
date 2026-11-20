@@ -357,6 +357,10 @@ func TestOtherMethodsAreRejected(t *testing.T) {
 func TestIdleTimeFollowsTheAudience(t *testing.T) {
 	server := New(Config{Addr: "127.0.0.1:0", Path: "/cam.ts"}, testLogger())
 
+	// The monotonic clock ticks coarser than this test runs, so two reads in the
+	// same tick subtract to exactly zero. Give it a moment before measuring
+	// instead of insisting that "just now" is greater than zero.
+	time.Sleep(time.Millisecond)
 	if server.IdleFor() <= 0 {
 		t.Fatal("a server nobody is watching is already idle")
 	}
@@ -368,6 +372,7 @@ func TestIdleTimeFollowsTheAudience(t *testing.T) {
 	}
 
 	server.remove(v)
+	time.Sleep(time.Millisecond)
 	if server.IdleFor() <= 0 {
 		t.Fatal("the idle clock must restart when the last viewer leaves")
 	}
