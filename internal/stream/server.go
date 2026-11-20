@@ -20,6 +20,7 @@ import (
 	"micam/internal/hls"
 	"micam/internal/miss"
 	"micam/internal/sink"
+	"micam/internal/status"
 )
 
 const (
@@ -81,6 +82,16 @@ type Server struct {
 
 	// lastFrame is the UnixNano of the last video frame handed to the fan-out.
 	lastFrame atomic.Int64
+	// Counters behind /metrics. They are cheap atomics on the media path.
+	framesTotal  atomic.Int64
+	audioTotal   atomic.Int64
+	bytesTotal   atomic.Int64
+	resyncsTotal atomic.Int64
+
+	// state and session are what the session loop reports for /metrics; the
+	// stream server has no other view of the camera side.
+	state   status.State
+	session int
 
 	// viewerSignal wakes WaitForViewer whenever the audience changes.
 	viewerSignal chan struct{}
@@ -126,6 +137,7 @@ func (s *Server) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc(s.cfg.Path, s.handle)
 	mux.HandleFunc("/healthz", s.handleHealth)
+	mux.HandleFunc("/metrics", s.handleMetrics)
 	mux.HandleFunc("/", s.handleIndex)
 
 	if s.cfg.HLS {
@@ -293,6 +305,7 @@ func (s *Server) Publish(p miss.Packet) {
 	// codec, and 1027 would produce a muxer for a stream type that does not exist.
 	if p.IsVideo() {
 		s.lastFrame.Store(time.Now().UnixNano())
+		s.framesTotal.Add(1)
 		for v := range s.viewers {
 			v.offer(p)
 		}
@@ -303,6 +316,7 @@ func (s *Server) Publish(p miss.Packet) {
 	}
 
 	if p.IsAudio() {
+		s.audioTotal.Add(1)
 		for v := range s.audioViewers {
 			v.offer(p)
 		}
@@ -380,11 +394,12 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v := &viewer{
-		frames:  make(chan miss.Packet, queueDepth),
-		newSink: factory,
-		log:     s.log,
-		remote:  clientIP(r),
-		since:   time.Now(),
+		frames:       make(chan miss.Packet, queueDepth),
+		resyncsTotal: &s.resyncsTotal,
+		newSink:      factory,
+		log:          s.log,
+		remote:       clientIP(r),
+		since:        time.Now(),
 	}
 	s.add(v)
 	s.log.Info("viewer connected", "from", r.RemoteAddr, "total", s.Viewers())
@@ -393,7 +408,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		s.log.Info("viewer disconnected", "total", s.Viewers())
 	}()
 
-	v.pump(countingWriter{w: w, n: &v.bytes}, flusher)
+	v.pump(countingWriter{w: w, n: &v.bytes, total: &s.bytesTotal}, flusher)
 }
 
 // HLSBase is the URL prefix shared by the HLS endpoints: the TS path without its
@@ -548,13 +563,14 @@ func (s *Server) IdleFor() time.Duration {
 
 // viewer is one connected player.
 type viewer struct {
-	frames  chan miss.Packet
-	started bool
-	resyncs int
-	remote  string
-	since   time.Time
-	bytes   atomic.Int64
-	log     *slog.Logger
+	frames       chan miss.Packet
+	resyncsTotal *atomic.Int64
+	started      bool
+	resyncs      int
+	remote       string
+	since        time.Time
+	bytes        atomic.Int64
+	log          *slog.Logger
 	// newSink builds this viewer's wire format once the codec is known.
 	newSink sink.Factory
 }
@@ -586,6 +602,9 @@ func (v *viewer) offer(p miss.Packet) {
 	v.discardBacklog()
 	v.started = false
 	v.resyncs++
+	if v.resyncsTotal != nil {
+		v.resyncsTotal.Add(1)
+	}
 	if v.log != nil {
 		v.log.Debug("viewer behind, resynchronising at the next keyframe", "resyncs", v.resyncs)
 	}
@@ -730,6 +749,8 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	} else {
 		b.WriteString("last frame: never\n")
 	}
+
+	b.WriteString("metrics: /metrics\nhealth:  /healthz\n")
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

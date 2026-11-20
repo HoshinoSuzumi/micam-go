@@ -62,9 +62,9 @@ func runCamera(ctx context.Context, opts *cli.Options, client *cloud.Client,
 		// On-demand: the camera is only asked for a stream when somebody is
 		// watching. Without this it encodes around the clock, viewer or not.
 		if opts.IdleStop > 0 {
-			rep.SetState(status.StateIdle, nil)
+			noteState(rep, server, status.StateIdle, nil)
 			if !server.WaitForViewer(ctx) {
-				rep.SetState(status.StateStopped, nil)
+				noteState(rep, server, status.StateStopped, nil)
 				return exitOK
 			}
 		}
@@ -73,7 +73,7 @@ func runCamera(ctx context.Context, opts *cli.Options, client *cloud.Client,
 		out := streamSession(ctx, opts, client, target, session, server, rep, log)
 
 		if ctx.Err() != nil {
-			rep.SetState(status.StateStopped, nil)
+			noteState(rep, server, status.StateStopped, nil)
 			return out.code
 		}
 		if out.idle {
@@ -82,7 +82,7 @@ func runCamera(ctx context.Context, opts *cli.Options, client *cloud.Client,
 			continue
 		}
 		if !out.retryable {
-			rep.SetState(status.StateError, out.err)
+			noteState(rep, server, status.StateError, out.err)
 			return out.code
 		}
 
@@ -91,10 +91,10 @@ func runCamera(ctx context.Context, opts *cli.Options, client *cloud.Client,
 			if opts.Reconnect > 0 {
 				log.Error("giving up", "attempts", pacer.attempt, "max", opts.Reconnect+1)
 			}
-			rep.SetState(status.StateError, out.err)
+			noteState(rep, server, status.StateError, out.err)
 			return out.code
 		}
-		rep.SetState(status.StateRetrying, out.err)
+		noteState(rep, server, status.StateRetrying, out.err)
 
 		switch {
 		case out.cloud:
@@ -116,6 +116,12 @@ func runCamera(ctx context.Context, opts *cli.Options, client *cloud.Client,
 			return out.code
 		}
 	}
+}
+
+// noteState updates the reporter (what the UI reads) and the metrics gauge.
+func noteState(rep *status.Reporter, server *stream.Server, st status.State, err error) {
+	noteState(rep, server, st, err)
+	server.NoteState(st)
 }
 
 // startStreamServer binds the HTTP server for the life of the process.
@@ -314,7 +320,8 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 	log *slog.Logger) outcome {
 
 	rep.BeginSession(session)
-	rep.SetState(status.StateConnecting, nil)
+	server.NoteSession(session)
+	noteState(rep, server, status.StateConnecting, nil)
 	rep.Stage(status.StageProvisioning)
 
 	keys, err := miss.GenerateKeys()
@@ -439,7 +446,7 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 		server.Publish(packet)
 		frames++
 		if frames == 1 {
-			rep.SetState(status.StateStreaming, nil)
+			noteState(rep, server, status.StateStreaming, nil)
 		}
 		rep.Frame(packet.CodecName())
 		rep.Sample(server.Viewers(), server.Resyncs())

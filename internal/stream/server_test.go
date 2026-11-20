@@ -6,11 +6,13 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"micam/internal/miss"
+	"micam/internal/status"
 )
 
 func testLogger() *slog.Logger {
@@ -464,5 +466,77 @@ func TestIndexListsTheOutputs(t *testing.T) {
 	defer missing.Body.Close()
 	if missing.StatusCode != http.StatusNotFound {
 		t.Fatalf("unknown path = %d, want 404", missing.StatusCode)
+	}
+}
+
+// The scrape is the only thing an external monitor sees, so the names and the
+// shape matter more than the numbers.
+func TestMetricsExposeWhatAPrometheusWouldWant(t *testing.T) {
+	server := startServer(t)
+	base := server.URL()[:strings.Index(server.URL(), "/cam.ts")]
+
+	server.NoteState(status.StateStreaming)
+	server.NoteSession(3)
+	for i := 0; i < 4; i++ {
+		server.Publish(packet(uint32(i), i == 0, int64(i)*50))
+	}
+
+	response, err := http.Get(base + "/metrics")
+	if err != nil {
+		t.Fatalf("GET /metrics: %v", err)
+	}
+	defer response.Body.Close()
+
+	body, _ := io.ReadAll(response.Body)
+	text := string(body)
+
+	if ct := response.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") || !strings.Contains(ct, "version=0.0.4") {
+		t.Errorf("content-type = %q", ct)
+	}
+
+	for _, want := range []string{
+		"# TYPE micam_up gauge",
+		"micam_up 1",
+		`micam_stream_state{state="streaming"} 1`,
+		`micam_stream_state{state="idle"} 0`,
+		"micam_session 3",
+		`micam_viewers{kind="ts"} 0`,
+		`micam_viewers{kind="hls"} 0`,
+		"micam_frames_published_total 4",
+		"micam_last_frame_age_seconds",
+		"# TYPE micam_viewer_bytes_total counter",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("metrics missing %q", want)
+		}
+	}
+
+	// A TYPE line must name a real metric type: passing a label name there
+	// produces a scrape Prometheus rejects outright.
+	validTypes := map[string]bool{"counter": true, "gauge": true, "histogram": true, "summary": true, "untyped": true}
+	for _, line := range strings.Split(text, "\n") {
+		rest, ok := strings.CutPrefix(line, "# TYPE ")
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(rest)
+		if len(fields) != 2 || !validTypes[fields[1]] {
+			t.Errorf("bad type line %q", line)
+		}
+	}
+
+	// Every sample line must be "name value" or "name{labels} value".
+	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			t.Errorf("malformed sample %q", line)
+			continue
+		}
+		if _, err := strconv.ParseFloat(fields[1], 64); err != nil {
+			t.Errorf("value of %q is not a number: %v", line, err)
+		}
 	}
 }

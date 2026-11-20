@@ -118,14 +118,18 @@ func (s *Server) ViewersInfo() []status.Connection {
 
 // countingWriter tallies what a viewer has received.
 type countingWriter struct {
-	w io.Writer
-	n *atomic.Int64
+	w     io.Writer
+	n     *atomic.Int64
+	total *atomic.Int64
 }
 
 func (c countingWriter) Write(p []byte) (int, error) {
 	n, err := c.w.Write(p)
 	if n > 0 {
 		c.n.Add(int64(n))
+		if c.total != nil {
+			c.total.Add(int64(n))
+		}
 	}
 	return n, err
 }

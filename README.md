@@ -190,9 +190,21 @@ make fpk                        # 出 amd64 与 arm64 两个包
 | `/cam.m3u8` | HLS（fMP4 + Opus），Safari 和 iOS 只能播这个 |
 | `/cam.wav` | G.711 音频，`--audio` 打开后才有 |
 | `/healthz` | 200 表示正常：没人看算正常，有人看时要求 15 秒内有过帧，否则 503 |
+| `/metrics` | Prometheus 文本格式：状态、观众数、帧数与字节数、重同步、HLS 分片与丢弃 |
 | `/` | 纯文本索引，列出上面这些和当前观众数 |
 
 `/healthz` 适合放进 Docker healthcheck 或 NAS 的监控，`/` 适合直接用浏览器打开看一眼。
+
+`/metrics` 里的指标都是抓取时现读的计数器和 gauge，没有引入任何客户端库：
+
+```
+micam_stream_state{state="streaming"} 1
+micam_viewers{kind="ts"} 1
+micam_frames_published_total 271331
+micam_last_frame_age_seconds 0.04
+```
+
+`micam_last_frame_age_seconds` 是最好用的一条：有人看却持续增长，就是流断了。
 
 ## 局域网直连
 
