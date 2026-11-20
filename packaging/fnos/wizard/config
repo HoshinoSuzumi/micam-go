@@ -163,6 +163,16 @@
         ]
       },
       {
+        "type": "text",
+        "field": "wizard_idle_stop",
+        "label": "无人观看后释放摄像头（分钟）",
+        "initValue": "0",
+        "helpText": "填 0 表示一直拉流。填 5 表示没人看满 5 分钟就断开摄像头，下一次有人连上再重新拉，省电也省摄像头寿命",
+        "rules": [
+          { "pattern": "^[0-9]+$", "message": "请填数字" }
+        ]
+      },
+      {
         "type": "tips",
         "helpText": "保存后会重启服务。如果一直没画面，先看应用目录下 var/micam.log。"
       }

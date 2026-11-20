@@ -58,6 +58,7 @@ type Options struct {
 	ShowVersion    bool
 	ListCameras    bool
 	Reconnect      int
+	IdleStop       int
 	LAN            string
 	Dump           string
 	DumpSeconds    int
@@ -125,6 +126,8 @@ func Parse(args []string) (*Options, error) {
 		"log in, print the cameras on the account and exit")
 	fs.IntVar(&opts.Reconnect, "reconnect", envIntOr("MICAM_RECONNECT", 0),
 		"retry the stream this many times when it ends (0 disables)")
+	fs.IntVar(&opts.IdleStop, "idle-stop", envIntOr("MICAM_IDLE_STOP", 0),
+		"release the camera after this many minutes with no viewers (0 disables)")
 	fs.StringVar(&opts.LAN, "lan", envOr("MICAM_LAN", LANPrefer),
 		"prefer|only|off: try a direct local-network session before the relay")
 	fs.StringVar(&opts.StatusFile, "status-file", envOr("MICAM_STATUS_FILE", ""),
@@ -170,6 +173,9 @@ func Parse(args []string) (*Options, error) {
 	}
 	if opts.Reconnect < 0 {
 		return nil, fmt.Errorf("reconnect must be >= 0, got %d", opts.Reconnect)
+	}
+	if opts.IdleStop < 0 || opts.IdleStop > 1440 {
+		return nil, fmt.Errorf("idle-stop must be 0..1440 minutes, got %d", opts.IdleStop)
 	}
 
 	opts.LAN = strings.ToLower(strings.TrimSpace(opts.LAN))

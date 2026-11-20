@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -332,5 +333,26 @@ func TestStatusSaysWhenNothingPublishesState(t *testing.T) {
 	}
 	if got.App.State != status.StateConnecting || got.App.Stage != status.Stage("no-status-file") {
 		t.Fatalf("state/stage = %q/%q, want connecting/no-status-file", got.App.State, got.App.Stage)
+	}
+}
+
+// Without a session or a token there is nothing to ask the cloud; the picker has to
+// say so instead of hanging on a login it cannot perform.
+func TestCamerasExplainsAMissingLogin(t *testing.T) {
+	server, _ := newTestServer(t)
+
+	code, body := request(t, server, "GET", "/api/cameras", "")
+	if code != http.StatusBadGateway {
+		t.Fatalf("code = %d, want 502; body = %s", code, body)
+	}
+	if !strings.Contains(body, "error") {
+		t.Fatalf("body = %s", body)
+	}
+}
+
+func TestCamerasRejectsOtherMethods(t *testing.T) {
+	server, _ := newTestServer(t)
+	if code, _ := request(t, server, "POST", "/api/cameras", ""); code != http.StatusMethodNotAllowed {
+		t.Fatalf("code = %d, want 405", code)
 	}
 }

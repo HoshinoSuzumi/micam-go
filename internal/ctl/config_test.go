@@ -19,6 +19,7 @@ func TestConfigRoundTrip(t *testing.T) {
 	want.PTSLead = 0
 	want.LAN = "only"
 	want.Reconnect = 9
+	want.IdleStop = 5
 
 	if err := os.WriteFile(path, want.Encode(), 0o600); err != nil {
 		t.Fatal(err)
@@ -114,6 +115,7 @@ func TestValidate(t *testing.T) {
 		"user id text":   func(c *Config) { c.UserID = "tim" },
 		"quality range":  func(c *Config) { c.Quality = 6 },
 		"pts range":      func(c *Config) { c.PTSLead = 9000 },
+		"idle range":     func(c *Config) { c.IdleStop = 5000 },
 		"no account":     func(c *Config) { c.User, c.UserID = "", "" },
 		"token spaces":   func(c *Config) { c.PassToken = " abc" },
 		"token newline":  func(c *Config) { c.PassToken = "a\nb" },

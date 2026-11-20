@@ -9,6 +9,7 @@ package ctl
 import (
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Paths is where the installed application keeps its files.
@@ -47,10 +48,24 @@ func (p Paths) StatusFile() string { return filepath.Join(p.VAR, "status.json") 
 func (p Paths) PIDFile() string    { return filepath.Join(p.VAR, "micam.pid") }
 func (p Paths) LogFile() string    { return filepath.Join(p.VAR, "micam.log") }
 
+// DataDir is where the cached session lives.
+//
+// cmd/main prefers the shared folder fnOS creates for the package and falls back
+// to var/data; this has to make the same choice, or the UI reads a directory the
+// daemon never writes to.
+func (p Paths) DataDir() string {
+	if shares := os.Getenv("TRIM_DATA_SHARE_PATHS"); shares != "" {
+		if first, _, _ := strings.Cut(shares, ":"); first != "" {
+			return first
+		}
+	}
+	return filepath.Join(p.VAR, "data")
+}
+
 // CredentialsFile is the cached Mi session; its presence means a login already
 // happened and the service can start without a token.
 func (p Paths) CredentialsFile() string {
-	return filepath.Join(p.VAR, "data", "credentials.json")
+	return filepath.Join(p.DataDir(), "credentials.json")
 }
 
 func envOr(key, fallback string) string {

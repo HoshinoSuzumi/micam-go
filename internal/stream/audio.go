@@ -147,6 +147,7 @@ func (s *Server) addAudio(v *audioViewer) {
 		return
 	}
 	s.audioViewers[v] = struct{}{}
+	s.noteViewersLocked()
 }
 
 func (s *Server) removeAudio(v *audioViewer) {
@@ -155,6 +156,7 @@ func (s *Server) removeAudio(v *audioViewer) {
 	if _, ok := s.audioViewers[v]; ok {
 		delete(s.audioViewers, v)
 		close(v.packets)
+		s.noteViewersLocked()
 	}
 }
 

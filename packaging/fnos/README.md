@@ -93,6 +93,9 @@ cmd/main start
   `signal.NotifyContext` 优雅退出；10 秒不退再 `KILL`；
 - `status` 只认 pidfile 里的进程，返回 0 或 3。
 
+HTTP 端口由 `cmd/main` 一次性绑定，不在会话之间开关：重连期间播放器是卡住而不是被拒绝，
+按需拉流也依赖这一点（有人在等的时候才去连摄像头）。
+
 未配置时（缺 DID，或既没有 passToken 也没有会话缓存）`start` 不会启动，只在
 `TRIM_TEMP_LOGFILE` 里写一句说明——留着不启动，比每 15 秒重启一次刷日志好排查。
 

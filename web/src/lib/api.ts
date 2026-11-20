@@ -7,8 +7,16 @@ export type StreamState =
   | "connecting"
   | "streaming"
   | "retrying"
+  | "idle"
   | "stopped"
   | "error";
+
+export interface Camera {
+  did: string;
+  name: string;
+  model: string;
+  online: boolean;
+}
 
 export interface StreamURL {
   url: string;
@@ -67,6 +75,8 @@ export interface Config {
   pts_lead: number;
   lan: string;
   reconnect: number;
+  /** idle_stop releases the camera after this many minutes with no viewers. */
+  idle_stop: number;
   /** hls switches on the playlist Safari and iOS need. */
   hls: boolean;
   /** hls_window is how many segments the playlist keeps. */
@@ -121,6 +131,12 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(message);
   }
   return payload as T;
+}
+
+/** getCameras lists the account's cameras, so the DID can be picked instead of typed. */
+export async function getCameras(): Promise<Camera[]> {
+  const body = await call<{ ok: boolean; cameras: Camera[] }>("api/cameras");
+  return body.cameras ?? [];
 }
 
 export function getStatus(): Promise<StatusResponse> {

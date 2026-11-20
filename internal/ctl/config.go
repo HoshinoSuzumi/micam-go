@@ -22,6 +22,9 @@ type Config struct {
 	PTSLead   int    `json:"pts_lead"`
 	LAN       string `json:"lan"`
 	Reconnect int    `json:"reconnect"`
+	// IdleStop releases the camera after this many minutes with no viewers.
+	// Zero keeps pulling around the clock, which is the historical behaviour.
+	IdleStop int `json:"idle_stop"`
 
 	// HLS turns on the playlist Safari and iOS need. HLSWindow is how many
 	// segments it keeps: more is steadier, fewer is lower latency.
@@ -109,6 +112,8 @@ func (c *Config) set(key, value string) {
 		c.LAN = value
 	case "MICAM_RECONNECT":
 		c.Reconnect = atoiOr(value, c.Reconnect)
+	case "MICAM_IDLE_STOP":
+		c.IdleStop = atoiOr(value, c.IdleStop)
 	case "MICAM_HLS":
 		if parsed, err := strconv.ParseBool(value); err == nil {
 			c.HLS = parsed
@@ -166,6 +171,7 @@ func (c Config) Encode() []byte {
 	fmt.Fprintf(&b, "MICAM_PTS_LEAD=%s\n", quote(strconv.Itoa(c.PTSLead)))
 	fmt.Fprintf(&b, "MICAM_LAN=%s\n", quote(c.LAN))
 	fmt.Fprintf(&b, "MICAM_RECONNECT=%s\n", quote(strconv.Itoa(c.Reconnect)))
+	fmt.Fprintf(&b, "MICAM_IDLE_STOP=%s\n", quote(strconv.Itoa(c.IdleStop)))
 	fmt.Fprintf(&b, "MICAM_HLS=%s\n", quote(strconv.FormatBool(c.HLS)))
 	fmt.Fprintf(&b, "MICAM_HLS_WINDOW=%s\n", quote(strconv.Itoa(c.HLSWindow)))
 	fmt.Fprintf(&b, "MICAM_AUDIO=%s\n", quote(strconv.FormatBool(c.Audio)))
@@ -203,6 +209,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Reconnect < 0 || c.Reconnect > 1000 {
 		return fmt.Errorf("reconnect must be 0..1000, got %d", c.Reconnect)
+	}
+	if c.IdleStop < 0 || c.IdleStop > 1440 {
+		return fmt.Errorf("idle_stop must be 0..1440 minutes, got %d", c.IdleStop)
 	}
 	if c.HLSWindow < 0 || c.HLSWindow > 60 {
 		return fmt.Errorf("hls_window must be 0..60, got %d", c.HLSWindow)

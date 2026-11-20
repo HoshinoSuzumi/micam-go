@@ -2,7 +2,10 @@
 package stream
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -25,6 +28,10 @@ const (
 	queueDepth = 25
 	// viewerTimeout drops a viewer when the camera has gone quiet.
 	viewerTimeout = 10 * time.Second
+	// firstFrameTimeout is how long a viewer that has received nothing at all
+	// waits. With on-demand streaming a player can connect while the camera
+	// session is still being established, and that takes longer than 10 seconds.
+	firstFrameTimeout = 45 * time.Second
 )
 
 // Config is where to listen and what path to serve.
@@ -71,6 +78,15 @@ type Server struct {
 	audioViewers map[*audioViewer]struct{}
 	hls          map[string]*hlsSession
 	closed       bool
+
+	// lastFrame is the UnixNano of the last video frame handed to the fan-out.
+	lastFrame atomic.Int64
+
+	// viewerSignal wakes WaitForViewer whenever the audience changes.
+	viewerSignal chan struct{}
+	// zeroSince is when the last viewer left, zero while someone is watching.
+	// On-demand streaming uses it to decide that the camera can be released.
+	zeroSince time.Time
 }
 
 // New builds a server. It does not listen until Start.
@@ -94,6 +110,8 @@ func New(cfg Config, log *slog.Logger) *Server {
 		viewers:      make(map[*viewer]struct{}),
 		audioViewers: make(map[*audioViewer]struct{}),
 		hls:          make(map[string]*hlsSession),
+		viewerSignal: make(chan struct{}, 1),
+		zeroSince:    time.Now(),
 	}
 }
 
@@ -107,6 +125,8 @@ func (s *Server) Start() error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(s.cfg.Path, s.handle)
+	mux.HandleFunc("/healthz", s.handleHealth)
+	mux.HandleFunc("/", s.handleIndex)
 
 	if s.cfg.HLS {
 		s.seg = hls.New(s.cfg.HLSWindow, s.cfg.Audio)
@@ -272,6 +292,7 @@ func (s *Server) Publish(p miss.Packet) {
 	// must never reach a video viewer: its sink is built from the first frame's
 	// codec, and 1027 would produce a muxer for a stream type that does not exist.
 	if p.IsVideo() {
+		s.lastFrame.Store(time.Now().UnixNano())
 		for v := range s.viewers {
 			v.offer(p)
 		}
@@ -468,6 +489,7 @@ func (s *Server) add(v *viewer) {
 		return
 	}
 	s.viewers[v] = struct{}{}
+	s.noteViewersLocked()
 }
 
 func (s *Server) remove(v *viewer) {
@@ -476,7 +498,52 @@ func (s *Server) remove(v *viewer) {
 	if _, ok := s.viewers[v]; ok {
 		delete(s.viewers, v)
 		close(v.frames)
+		s.noteViewersLocked()
 	}
+}
+
+// noteViewersLocked restarts the idle clock when the audience empties and wakes
+// anything waiting for one. The caller holds mu.
+func (s *Server) noteViewersLocked() {
+	if len(s.viewers)+len(s.audioViewers)+len(s.hls) > 0 {
+		s.zeroSince = time.Time{}
+	} else if s.zeroSince.IsZero() {
+		s.zeroSince = time.Now()
+	}
+
+	select {
+	case s.viewerSignal <- struct{}{}:
+	default:
+		// A signal is already pending; one wake-up is enough.
+	}
+}
+
+// WaitForViewer blocks until somebody is watching, and reports false when ctx ends
+// first.
+//
+// It is what makes on-demand streaming possible: the camera session is only worth
+// opening when there is a client to serve.
+func (s *Server) WaitForViewer(ctx context.Context) bool {
+	for {
+		if s.Viewers() > 0 {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-s.viewerSignal:
+		}
+	}
+}
+
+// IdleFor reports how long nobody has been watching, or zero while someone is.
+func (s *Server) IdleFor() time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.zeroSince.IsZero() {
+		return 0
+	}
+	return time.Since(s.zeroSince)
 }
 
 // viewer is one connected player.
@@ -550,7 +617,7 @@ func (v *viewer) pump(w io.Writer, flusher http.Flusher) {
 		}
 	}()
 
-	timeout := time.NewTimer(viewerTimeout)
+	timeout := time.NewTimer(firstFrameTimeout)
 	defer timeout.Stop()
 
 	for {
@@ -593,4 +660,79 @@ func (v *viewer) pump(w io.Writer, flusher http.Flusher) {
 // String describes the server for logs.
 func (s *Server) String() string {
 	return "stream.Server(" + s.cfg.Addr + s.cfg.Path + ", viewers=" + strconv.Itoa(s.Viewers()) + ")"
+}
+
+// handleHealth answers /healthz for Docker healthchecks and NAS monitors.
+//
+// It reports whether frames are still moving rather than whether the process is
+// merely alive: a wedged camera looks perfectly healthy from the outside
+// otherwise. While nobody is watching there is nothing to be late for, so that
+// counts as healthy too.
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	last := s.lastFrame.Load()
+	ageMS := int64(-1)
+	if last > 0 {
+		ageMS = time.Since(time.Unix(0, last)).Milliseconds()
+	}
+
+	// Healthy when nobody is waiting, when nothing has been sent yet (a camera
+	// still being established is not a fault), or when frames are moving.
+	healthy := s.Viewers() == 0 || last == 0 || ageMS < 15_000
+	code := http.StatusOK
+	if !healthy {
+		code = http.StatusServiceUnavailable
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"ok":            healthy,
+		"viewers":       s.Viewers(),
+		"last_frame_ms": ageMS,
+	})
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(code)
+	_, _ = w.Write(append(body, '\n'))
+}
+
+// handleIndex answers / with a plain list of what this server offers. Typing the
+// address into a browser is the first thing anyone does; a 404 is a poor answer.
+func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	base := s.cfg.Path
+	var b strings.Builder
+	b.WriteString("micam\n=====\n\n")
+	fmt.Fprintf(&b, "MPEG-TS          %s\n", base)
+	if s.cfg.HLS {
+		fmt.Fprintf(&b, "HLS (Safari/iOS) %s\n", s.HLSPlaylistPath())
+	}
+	if s.cfg.Audio {
+		fmt.Fprintf(&b, "Audio (WAV)      %s\n", s.cfg.AudioPath)
+	}
+	fmt.Fprintf(&b, "\nviewers: %d\n", s.Viewers())
+	if last := s.lastFrame.Load(); last > 0 {
+		fmt.Fprintf(&b, "last frame: %s ago\n", time.Since(time.Unix(0, last)).Round(time.Second))
+	} else {
+		b.WriteString("last frame: never\n")
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, b.String())
 }

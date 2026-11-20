@@ -42,18 +42,44 @@ const provisionTimeout = 15 * time.Second
 func runCamera(ctx context.Context, opts *cli.Options, client *cloud.Client,
 	target cloud.Device, rep *status.Reporter, log *slog.Logger) int {
 
+	// --dump writes a file instead of serving, so there is nothing to listen on.
+	if opts.Dump != "" {
+		return streamSession(ctx, opts, client, target, 1, nil, rep, log).code
+	}
+
+	server, reachable, code := startStreamServer(opts, rep, log)
+	if server == nil {
+		return code
+	}
+	defer server.Close()
+
+	printBanner(server, reachable, opts)
+
 	pacer := &retryPacer{max: opts.Reconnect}
-	bannerShown := false
 	session := 0
 
 	for {
+		// On-demand: the camera is only asked for a stream when somebody is
+		// watching. Without this it encodes around the clock, viewer or not.
+		if opts.IdleStop > 0 {
+			rep.SetState(status.StateIdle, nil)
+			if !server.WaitForViewer(ctx) {
+				rep.SetState(status.StateStopped, nil)
+				return exitOK
+			}
+		}
+
 		session++
-		out := streamSession(ctx, opts, client, target, session, !bannerShown, rep, log)
-		bannerShown = bannerShown || out.streaming
+		out := streamSession(ctx, opts, client, target, session, server, rep, log)
 
 		if ctx.Err() != nil {
 			rep.SetState(status.StateStopped, nil)
 			return out.code
+		}
+		if out.idle {
+			log.Info("nobody is watching any more, releasing the camera",
+				"after_min", opts.IdleStop)
+			continue
 		}
 		if !out.retryable {
 			rep.SetState(status.StateError, out.err)
@@ -89,6 +115,123 @@ func runCamera(ctx context.Context, opts *cli.Options, client *cloud.Client,
 		case <-ctx.Done():
 			return out.code
 		}
+	}
+}
+
+// startStreamServer binds the HTTP server for the life of the process.
+//
+// It used to be built inside every session, which closed the port for the whole
+// reconnect delay: a player then got "connection refused" instead of a stall, and
+// on-demand streaming had nowhere to wait for its first viewer.
+func startStreamServer(opts *cli.Options, rep *status.Reporter,
+	log *slog.Logger) (*stream.Server, []stream.ReachableURL, int) {
+
+	addr := net.JoinHostPort(opts.Bind, strconv.Itoa(opts.Port))
+	server := stream.New(stream.Config{
+		Addr:      addr,
+		Path:      "/cam.ts",
+		PTSLeadMS: opts.PTSLeadMS,
+		HLS:       opts.HLS,
+		HLSWindow: opts.HLSWindow,
+		Audio:     opts.Audio,
+		AudioRate: opts.AudioRate,
+	}, log)
+	if err := server.Start(); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "in use") {
+			log.Error("port already in use", "port", opts.Port, "hint", "pass --port to pick another")
+			return nil, nil, exitPort
+		}
+		log.Error("cannot start the stream server", "err", err)
+		return nil, nil, exitPort
+	}
+
+	reachable := server.ReachableURLs()
+	endpoints := make([]status.StreamURL, 0, len(reachable))
+	for _, u := range reachable {
+		endpoints = append(endpoints, status.StreamURL{URL: u.URL, Iface: u.Iface})
+	}
+	rep.Bind(server.Addr(), endpoints)
+
+	// The playlist a Safari or iOS player needs. It is a different endpoint, not
+	// a different address, so it is derived from the same list.
+	if opts.HLS {
+		hls := make([]status.StreamURL, 0, len(reachable)+1)
+		for _, u := range reachable {
+			hls = append(hls, status.StreamURL{URL: server.HLSURLOf(u.URL), Iface: u.Iface})
+		}
+		if len(hls) == 0 {
+			hls = append(hls, status.StreamURL{URL: server.HLSURLOf(server.URL())})
+		}
+		rep.BindHLS(hls)
+	}
+
+	if opts.Audio {
+		audio := make([]status.StreamURL, 0, len(reachable)+1)
+		for _, u := range reachable {
+			audio = append(audio, status.StreamURL{URL: server.AudioURLOf(u.URL), Iface: u.Iface})
+		}
+		if len(audio) == 0 {
+			audio = append(audio, status.StreamURL{URL: server.AudioURLOf(server.URL())})
+		}
+		rep.BindAudio(audio)
+	}
+
+	if server.Loopback() {
+		// The single most confusing failure: everything looks healthy, but nothing
+		// outside this machine can reach the stream.
+		log.Warn("the stream listens on loopback only, so nothing outside this machine can open it",
+			"listen", server.Addr(), "hint", "set --bind 0.0.0.0 (the fnOS package already does)")
+	}
+
+	return server, reachable, exitOK
+}
+
+// printBanner is what a human sees once at startup: where it listens, and which
+// addresses somebody else could use.
+func printBanner(server *stream.Server, reachable []stream.ReachableURL, opts *cli.Options) {
+	fmt.Println()
+	fmt.Printf("  Listening on:  %s\n", server.Addr())
+	fmt.Printf("  Local URL:     %s\n", server.URL())
+
+	if len(reachable) > 0 {
+		fmt.Println()
+		fmt.Println("  Reachable at:")
+		for _, u := range reachable {
+			fmt.Printf("    %-40s (%s)\n", u.URL, u.Iface)
+		}
+	}
+
+	player := server.URL()
+	if len(reachable) > 0 {
+		player = reachable[0].URL
+	}
+	fmt.Println()
+	fmt.Printf("    mpv    %s\n", player)
+	fmt.Printf("    vlc    %s\n", player)
+	fmt.Printf("    ffplay %s\n", player)
+
+	if opts.HLS {
+		fmt.Println()
+		fmt.Println("  HLS (Safari / iOS):")
+		if len(reachable) > 0 {
+			fmt.Printf("    %s\n", server.HLSURLOf(reachable[0].URL))
+		} else {
+			fmt.Printf("    %s\n", server.HLSURLOf(server.URL()))
+		}
+	}
+
+	if opts.Audio {
+		fmt.Println("  Audio (WAV):")
+		if len(reachable) > 0 {
+			fmt.Printf("    %s\n", server.AudioURLOf(reachable[0].URL))
+		} else {
+			fmt.Printf("    %s\n", server.AudioURLOf(server.URL()))
+		}
+	}
+	fmt.Println()
+
+	if opts.IdleStop > 0 {
+		fmt.Printf("  无人观看 %d 分钟后释放摄像头，有人连上再重新拉流。\n\n", opts.IdleStop)
 	}
 }
 
@@ -146,8 +289,8 @@ type outcome struct {
 	// cloud marks a failure before the camera was reached: the Mi API is down or
 	// unreachable, which says nothing about the camera behind it.
 	cloud bool
-	// streaming is set once the local server was announced to the user.
-	streaming bool
+	// idle marks a session that ended on purpose because nobody was watching.
+	idle bool
 	// frames counts relayed video frames and duration how long the session lived.
 	frames   int
 	duration time.Duration
@@ -163,8 +306,11 @@ func (o outcome) healthy() bool {
 // streamSession runs exactly one attempt: provision, connect, authenticate,
 // serve. Everything it opens is released by its own defers, so a retry starts
 // from a clean slate.
+// streamSession runs one attempt against the server runCamera already started.
+//
+// server is nil only for --dump, which writes a file instead of serving.
 func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
-	target cloud.Device, session int, showBanner bool, rep *status.Reporter,
+	target cloud.Device, session int, server *stream.Server, rep *status.Reporter,
 	log *slog.Logger) outcome {
 
 	rep.BeginSession(session)
@@ -249,114 +395,16 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 		}
 	}
 
-	addr := net.JoinHostPort(opts.Bind, strconv.Itoa(opts.Port))
-	server := stream.New(stream.Config{
-		Addr:      addr,
-		Path:      "/cam.ts",
-		PTSLeadMS: opts.PTSLeadMS,
-		HLS:       opts.HLS,
-		HLSWindow: opts.HLSWindow,
-		Audio:     opts.Audio,
-		AudioRate: opts.AudioRate,
-	}, log)
-	if err := server.Start(); err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "in use") {
-			log.Error("port already in use", "port", opts.Port, "hint", "pass --port to pick another")
-			return outcome{code: exitPort}
-		}
-		log.Error("cannot start the stream server", "err", err)
-		return outcome{code: exitPort}
-	}
-	defer server.Close()
-
-	reachable := server.ReachableURLs()
-	endpoints := make([]status.StreamURL, 0, len(reachable))
-	for _, u := range reachable {
-		endpoints = append(endpoints, status.StreamURL{URL: u.URL, Iface: u.Iface})
-	}
-	rep.Bind(server.Addr(), endpoints)
-
-	// The playlist a Safari or iOS player needs. It is a different endpoint, not
-	// a different address, so it is derived from the same list.
-	if opts.HLS {
-		hls := make([]status.StreamURL, 0, len(reachable)+1)
-		for _, u := range reachable {
-			hls = append(hls, status.StreamURL{URL: server.HLSURLOf(u.URL), Iface: u.Iface})
-		}
-		if len(hls) == 0 {
-			hls = append(hls, status.StreamURL{URL: server.HLSURLOf(server.URL())})
-		}
-		rep.BindHLS(hls)
-	}
-
-	if opts.Audio {
-		audio := make([]status.StreamURL, 0, len(reachable)+1)
-		for _, u := range reachable {
-			audio = append(audio, status.StreamURL{URL: server.AudioURLOf(u.URL), Iface: u.Iface})
-		}
-		if len(audio) == 0 {
-			audio = append(audio, status.StreamURL{URL: server.AudioURLOf(server.URL())})
-		}
-		rep.BindAudio(audio)
-	}
-
-	if showBanner {
-		fmt.Println()
-		fmt.Printf("  Listening on:  %s\n", server.Addr())
-		fmt.Printf("  Local URL:     %s\n", server.URL())
-
-		// The addresses a player elsewhere can use. "127.0.0.1" is true and
-		// useless; the wildcard the process bound to is not a URL at all.
-		if len(reachable) > 0 {
-			fmt.Println()
-			fmt.Println("  Reachable at:")
-			for _, u := range reachable {
-				fmt.Printf("    %-40s (%s)\n", u.URL, u.Iface)
-			}
-		}
-
-		player := server.URL()
-		if len(reachable) > 0 {
-			player = reachable[0].URL
-		}
-		fmt.Println()
-		fmt.Printf("    mpv    %s\n", player)
-		fmt.Printf("    vlc    %s\n", player)
-		fmt.Printf("    ffplay %s\n", player)
-
-		if opts.HLS {
-			fmt.Println()
-			fmt.Printf("  HLS (Safari / iOS):\n")
-			if len(reachable) > 0 {
-				fmt.Printf("    %s\n", server.HLSURLOf(reachable[0].URL))
-			} else {
-				fmt.Printf("    %s\n", server.HLSURLOf(server.URL()))
-			}
-		}
-
-		if opts.Audio {
-			fmt.Printf("  Audio (WAV):\n")
-			if len(reachable) > 0 {
-				fmt.Printf("    %s\n", server.AudioURLOf(reachable[0].URL))
-			} else {
-				fmt.Printf("    %s\n", server.AudioURLOf(server.URL()))
-			}
-		}
-		fmt.Println()
-	} else {
+	if session > 1 {
 		log.Info("streaming again", "listen", server.Addr(), "url", server.URL())
 	}
-
-	if server.Loopback() {
-		// The single most confusing failure: everything looks healthy, but nothing
-		// outside this machine can reach the stream.
-		log.Warn("the stream listens on loopback only, so nothing outside this machine can open it",
-			"listen", server.Addr(), "hint", "set --bind 0.0.0.0 (the fnOS package already does)")
-	}
-
 	frames := 0
 	audioFrames := 0
+	paused := false
 	var streamErr error
+
+	idleAfter := time.Duration(opts.IdleStop) * time.Minute
+
 	for ctx.Err() == nil {
 		// The camera keeps talking on channel 0 while it streams. Nothing here
 		// needs those messages, but consuming them keeps the bounded queue from
@@ -397,6 +445,12 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 		rep.Sample(server.Viewers(), server.Resyncs())
 		if frames%20 == 0 {
 			rep.Connections(server.ViewersInfo())
+			if idleAfter > 0 && server.IdleFor() > idleAfter {
+				log.Info("nobody has watched for a while, releasing the camera",
+					"idle", server.IdleFor().Round(time.Second).String())
+				paused = true
+				break
+			}
 		}
 		if frames%600 == 0 {
 			log.Info("relaying", "frames", frames, "viewers", server.Viewers(),
@@ -405,14 +459,18 @@ func streamSession(ctx context.Context, opts *cli.Options, client *cloud.Client,
 	}
 
 	out := outcome{
-		code:      exitOK,
-		streaming: true,
-		frames:    frames,
-		duration:  time.Since(connectedAt),
-		err:       conn.Err(),
+		code:     exitOK,
+		idle:     paused,
+		frames:   frames,
+		duration: time.Since(connectedAt),
+		err:      conn.Err(),
 	}
 
 	switch {
+	case paused:
+		// Ending on purpose is not a failure: the next viewer brings the camera
+		// back, and this must not spend the reconnect budget.
+		out.retryable = false
 	case ctx.Err() != nil:
 		log.Info("stopped", "frames", frames)
 		out.retryable = false

@@ -32,6 +32,7 @@
       return `${stage} · ${formatDuration(elapsed)}`;
     }
     if (app.state === "retrying") return "等待重连";
+    if (app.state === "idle") return "没有人观看，摄像头已释放";
     return "";
   });
 

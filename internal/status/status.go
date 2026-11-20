@@ -28,6 +28,9 @@ const (
 	StateRetrying State = "retrying"
 	// StateStopped is a clean shutdown (SIGTERM), or no session yet.
 	StateStopped State = "stopped"
+	// StateIdle means the service is up and waiting for a viewer; with
+	// --idle-stop the camera is not being pulled at all in this state.
+	StateIdle State = "idle"
 	// StateError is a failure that will not retry by itself.
 	StateError State = "error"
 )

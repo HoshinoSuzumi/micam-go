@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net"
@@ -346,5 +347,122 @@ func TestOtherMethodsAreRejected(t *testing.T) {
 	}
 	if allow := response.Header.Get("Allow"); !strings.Contains(allow, "HEAD") {
 		t.Fatalf("Allow = %q, want it to mention HEAD", allow)
+	}
+}
+
+// On-demand streaming is built on these two: idle time tells the session when to
+// let the camera go, and the signal tells a waiting session that somebody arrived.
+func TestIdleTimeFollowsTheAudience(t *testing.T) {
+	server := New(Config{Addr: "127.0.0.1:0", Path: "/cam.ts"}, testLogger())
+
+	if server.IdleFor() <= 0 {
+		t.Fatal("a server nobody is watching is already idle")
+	}
+
+	v := &viewer{frames: make(chan miss.Packet, 1)}
+	server.add(v)
+	if got := server.IdleFor(); got != 0 {
+		t.Fatalf("IdleFor = %v with a viewer attached, want 0", got)
+	}
+
+	server.remove(v)
+	if server.IdleFor() <= 0 {
+		t.Fatal("the idle clock must restart when the last viewer leaves")
+	}
+}
+
+func TestWaitForViewerWakesOnTheFirstOne(t *testing.T) {
+	server := New(Config{Addr: "127.0.0.1:0", Path: "/cam.ts"}, testLogger())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	woken := make(chan bool, 1)
+	go func() { woken <- server.WaitForViewer(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+	server.add(&viewer{frames: make(chan miss.Packet, 1)})
+
+	if !<-woken {
+		t.Fatal("WaitForViewer did not notice the viewer")
+	}
+}
+
+func TestWaitForViewerReturnsWhenTheContextEnds(t *testing.T) {
+	server := New(Config{Addr: "127.0.0.1:0", Path: "/cam.ts"}, testLogger())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+
+	if server.WaitForViewer(ctx) {
+		t.Fatal("nobody ever connected, WaitForViewer must report false")
+	}
+}
+
+func TestHealthReportsAFrameAge(t *testing.T) {
+	server := startServer(t)
+
+	// Nobody is watching: an idle server is healthy, there is nothing to be late
+	// for.
+	response, err := http.Get(server.URL()[:strings.Index(server.URL(), "/cam.ts")] + "/healthz")
+	if err != nil {
+		t.Fatalf("GET /healthz: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("idle health = %d, want 200", response.StatusCode)
+	}
+
+	// A viewer with frames flowing stays healthy.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL(), nil)
+	stream, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("open the stream: %v", err)
+	}
+	defer stream.Body.Close()
+
+	for i := 0; i < 3; i++ {
+		server.Publish(packet(uint32(i), i == 0, int64(i)*50))
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	response, err = http.Get(server.URL()[:strings.Index(server.URL(), "/cam.ts")] + "/healthz")
+	if err != nil {
+		t.Fatalf("GET /healthz: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("streaming health = %d, want 200", response.StatusCode)
+	}
+}
+
+func TestIndexListsTheOutputs(t *testing.T) {
+	server := startServer(t)
+	base := server.URL()[:strings.Index(server.URL(), "/cam.ts")]
+
+	response, err := http.Get(base + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer response.Body.Close()
+
+	body, _ := io.ReadAll(response.Body)
+	text := string(body)
+	for _, want := range []string{"/cam.ts", "viewers:"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("index missing %q:\n%s", want, text)
+		}
+	}
+
+	// Anything else is still a 404 rather than the index.
+	missing, err := http.Get(base + "/nope")
+	if err != nil {
+		t.Fatalf("GET /nope: %v", err)
+	}
+	defer missing.Body.Close()
+	if missing.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown path = %d, want 404", missing.StatusCode)
 	}
 }

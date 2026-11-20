@@ -13,6 +13,7 @@ MISS 会话后解密媒体，原样复用成 TS 输出。协议层是
 - 可选声音：摄像头的 Opus 原样进 TS 和 HLS 的音轨，不转码、不依赖编码器
 - 优先局域网直连，失败自动回落中继
 - 断流按连续失败计数重连；云接口不可达时不退出、也不占重试额度
+- 可选按需拉流：没人看就断开摄像头，有人连上再重新拉（`--idle-stop`）
 - fnOS 应用包自带管理界面：配置、启停、连接状态、运行日志
 
 ## 准备凭据
@@ -124,6 +125,7 @@ docker compose pull && docker compose up -d
 - 配置和「应用设置」写的是同一份 `etc/micam.env`
 - 会话缓存放在安装时创建的 `micam-go` 共享目录，文件管理器里可见，备份就是拷一个
   `credentials.json`
+- 配置里点「从账号读取」直接列出账号下的摄像头，不用先跑命令行查 DID
 - 「播放地址」按网卡列出可选地址（`enp1s0`、`tailscale0`…），选中后下面的 mpv / vlc /
   ffplay 命令跟着换，点一下即复制
 - 同一个网卡选的地址下面还给出 **HLS 播放列表**地址，Safari 和 iPhone 用这一条
@@ -159,6 +161,7 @@ make fpk                        # 出 amd64 与 arm64 两个包
 | `--audio-rate` | `8000` | WAV 头里的采样率；G.711 一般是 8000 |
 | `--lan` | `prefer` | `prefer` 先试直连再回落；`only` 只用直连；`off` 只用中继 |
 | `--reconnect` | `0` | 连续断流后的重连次数；`0` 交给编排层重启 |
+| `--idle-stop` | `0` | 无人观看这么多分钟后释放摄像头；`0` 表示一直拉流 |
 | `--data-dir` | `~/.micam` | `credentials.json` 所在目录 |
 | `--connect-timeout` | `90` | 中继握手总超时（秒） |
 | `--list-cameras` | off | 只列设备后退出 |
@@ -173,8 +176,23 @@ make fpk                        # 出 amd64 与 arm64 两个包
 
 `--relogin`、`--dump`、`--dump-seconds`、`--connect-timeout`、`--list-cameras` 只能用命令行。
 
+`--idle-stop N` 打开按需拉流：连续 N 分钟没有观众就断开摄像头会话，下一次有人
+连接时重新建立。播放器会多等两三秒，换来摄像头不再整夜空转。默认关闭。
+
 退出码：`1` 无摄像头或传输不支持，`2` 登录 / 2FA，`3` 会话失败，`4` 摄像头离线，
 `5` 无媒体，`6` 端口占用。
+
+## 地址
+
+| 路径 | 内容 |
+|---|---|
+| `/cam.ts` | MPEG-TS，给 mpv / VLC / ffmpeg |
+| `/cam.m3u8` | HLS（fMP4 + Opus），Safari 和 iOS 只能播这个 |
+| `/cam.wav` | G.711 音频，`--audio` 打开后才有 |
+| `/healthz` | 200 表示正常：没人看算正常，有人看时要求 15 秒内有过帧，否则 503 |
+| `/` | 纯文本索引，列出上面这些和当前观众数 |
+
+`/healthz` 适合放进 Docker healthcheck 或 NAS 的监控，`/` 适合直接用浏览器打开看一眼。
 
 ## 局域网直连
 

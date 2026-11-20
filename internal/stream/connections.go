@@ -40,6 +40,7 @@ func (s *Server) noteHLS(r *http.Request, size int) {
 	if !ok {
 		sess = &hlsSession{remote: ip, since: now}
 		s.hls[ip] = sess
+		s.noteViewersLocked()
 	}
 	sess.last = now
 	sess.bytes.Add(int64(size))
@@ -90,9 +91,11 @@ func (s *Server) ViewersInfo() []status.Connection {
 		})
 	}
 
+	pruned := false
 	for ip, sess := range s.hls {
 		if now.Sub(sess.last) > hlsSessionTimeout {
 			delete(s.hls, ip)
+			pruned = true
 			continue
 		}
 		out = append(out, status.Connection{
@@ -103,6 +106,10 @@ func (s *Server) ViewersInfo() []status.Connection {
 			Requests: sess.requests.Load(),
 			Last:     sess.last,
 		})
+	}
+
+	if pruned {
+		s.noteViewersLocked()
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].Since.Before(out[j].Since) })

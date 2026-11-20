@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import type { Config, StatusResponse } from "$lib/api";
-  import { saveConfig } from "$lib/api";
+  import type { Camera, Config, StatusResponse } from "$lib/api";
+  import { getCameras, saveConfig } from "$lib/api";
   import {
     Button,
     Card,
@@ -28,6 +28,7 @@
     pts_lead: number;
     lan: string;
     reconnect: number;
+    idle_stop: number;
     // The select stores a string; the API wants a boolean.
     hls: "on" | "off";
     hls_window: number;
@@ -46,6 +47,7 @@
       pts_lead: c.pts_lead ?? 100,
       lan: c.lan || "prefer",
       reconnect: c.reconnect ?? 5,
+      idle_stop: c.idle_stop ?? 0,
       hls: (c.hls ?? true) ? "on" : "off",
       hls_window: c.hls_window ?? 6,
       audio: (c.audio ?? false) ? "on" : "off",
@@ -60,6 +62,8 @@
   let saving = $state(false);
   let message = $state("");
   let error = $state("");
+  let cameras = $state<Camera[]>([]);
+  let loadingCameras = $state(false);
 
   // Only refresh from the server while the form is untouched: polling must never
   // overwrite what someone is in the middle of typing.
@@ -67,6 +71,23 @@
     const fresh = fromConfig(config);
     if (!dirty) form = fresh;
   });
+
+  async function loadCameras() {
+    loadingCameras = true;
+    error = "";
+    try {
+      cameras = await getCameras();
+      if (cameras.length === 1 && !form.did) {
+        form.did = cameras[0].did;
+        dirty = true;
+      }
+      if (cameras.length === 0) error = "这个账号下没有摄像头";
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      loadingCameras = false;
+    }
+  }
 
   function edit() {
     dirty = true;
@@ -148,14 +169,35 @@
 
       <div class="space-y-1.5">
         <Label for="did">摄像头 DID</Label>
-        <Input
-          id="did"
-          bind:value={form.did}
-          oninput={edit}
-          inputmode="numeric"
-          autocomplete="off"
-          placeholder="1221672311"
-        />
+        <div class="flex gap-2">
+          <Input
+            id="did"
+            bind:value={form.did}
+            oninput={edit}
+            inputmode="numeric"
+            autocomplete="off"
+            placeholder="1221672311"
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            class="h-9 shrink-0"
+            onclick={loadCameras}
+            disabled={loadingCameras}
+          >
+            {loadingCameras ? "读取中…" : "从账号读取"}
+          </Button>
+        </div>
+
+        {#if cameras.length > 0}
+          <Select bind:value={form.did} onchange={edit} aria-label="账号下的摄像头">
+            {#each cameras as camera (camera.did)}
+              <option value={camera.did}>
+                {camera.name} · {camera.model}{camera.online ? "" : "（离线）"}
+              </option>
+            {/each}
+          </Select>
+        {/if}
       </div>
 
       <div class="space-y-1.5">
@@ -199,6 +241,18 @@
           min="0"
           max="2000"
           bind:value={form.pts_lead}
+          oninput={edit}
+        />
+      </div>
+
+      <div class="space-y-1.5">
+        <Label for="idle-stop">无人观看后释放（分钟）</Label>
+        <Input
+          id="idle-stop"
+          type="number"
+          min="0"
+          max="1440"
+          bind:value={form.idle_stop}
           oninput={edit}
         />
       </div>

@@ -4,6 +4,7 @@ export const stateLabel: Record<StreamState, string> = {
   connecting: "连接中",
   streaming: "推流中",
   retrying: "重连中",
+  idle: "待机",
   stopped: "已停止",
   error: "出错",
 };
@@ -15,6 +16,7 @@ export const stateTone: Record<
   connecting: "info",
   streaming: "success",
   retrying: "warning",
+  idle: "info",
   stopped: "muted",
   error: "danger",
 };

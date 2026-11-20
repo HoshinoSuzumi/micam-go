@@ -142,6 +142,12 @@ func (s *Server) handle() reply {
 		}
 		return s.json(http.StatusOK, s.snapshot(nil))
 
+	case "/api/cameras":
+		if method != http.MethodGet {
+			return s.methodNotAllowed(method, route)
+		}
+		return s.cameras()
+
 	case "/api/log":
 		if method != http.MethodGet {
 			return s.methodNotAllowed(method, route)
