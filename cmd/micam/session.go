@@ -119,8 +119,12 @@ func runCamera(ctx context.Context, opts *cli.Options, client *cloud.Client,
 }
 
 // noteState updates the reporter (what the UI reads) and the metrics gauge.
+//
+// Both, always: the UI reads the status file and Prometheus reads the gauge, and a
+// state that reaches only one of them makes the two disagree about whether the
+// stream is up.
 func noteState(rep *status.Reporter, server *stream.Server, st status.State, err error) {
-	noteState(rep, server, st, err)
+	rep.SetState(st, err)
 	server.NoteState(st)
 }
 
